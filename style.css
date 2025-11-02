@@ -1,0 +1,209 @@
+body { margin: 0; padding: 0; }
+#map { height: 100vh; width: 100%; background-color: #333; }
+
+.map-controls {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 1000;
+    background-color: rgba(40, 40, 40, 0.8);
+    border: 1px solid #777;
+    padding: 10px;
+    border-radius: 5px;
+    font-family: Arial, sans-serif;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    gap: 10px; /* Spaces out the rows */
+}
+
+.map-control-item {
+    display: flex;
+    align-items: center; /* Vertically aligns the switch and text */
+}
+
+/* This is the label that acts as the switch *container* */
+.switch-container {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 24px;
+}
+
+/* Hide the original, ugly checkbox */
+.switch-container input[type="checkbox"] {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+/* The slider track */
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: .4s;
+    border-radius: 34px;
+}
+
+/* The slider circle */
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+}
+
+/* When the (hidden) input is checked, change the slider track color */
+input:checked + .slider {
+    background-color: #2196F3;
+}
+
+input:focus + .slider {
+    box-shadow: 0 0 1px #2196F3;
+}
+
+/* When the (hidden) input is checked, move the circle */
+input:checked + .slider:before {
+    transform: translateX(16px);
+}
+
+/* This is the *text* label (e.g., "Outgoing (Red)") */
+.map-control-item label[for] {
+    margin-left: 10px; /* Space between switch and text */
+    font-size: 14px;
+    white-space: nowrap;
+    cursor: pointer; /* Make the text clickable too */
+}
+
+#info-pane {
+    border-top: 1px solid #777; /* Separator line */
+    padding-top: 10px;
+    margin-top: 5px;
+    min-height: 40px; /* So the box doesn't jump in size */
+    user-select: none; /* Don't let text be selected */
+}
+
+/* Default "click a dot" text */
+#info-pane p {
+    margin: 0;
+    font-size: 13px;
+    color: #ccc;
+    font-style: italic;
+}
+
+/* Style for the City name */
+#info-pane .info-title {
+    font-size: 15px;
+    font-weight: bold;
+    color: #fff;
+    font-style: normal;
+}
+
+/* Style for the Country name */
+#info-pane .info-country {
+    font-size: 13px;
+    color: #ddd;
+    font-style: normal;
+}
+
+#info-pane .info-divider {
+    border: 0;
+    border-top: 1px solid #555;
+    margin: 6px 0;
+}
+
+#info-pane .info-asn {
+    font-size: 13px;
+    color: #aaa; /* A bit dimmer */
+    font-style: normal;
+}
+
+/* Style for our custom zoom-out button */
+.custom-zoom-out {
+    background-image: url('data:image/svg+xml;charset=utf-8,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Cpath d="M23 15H9v2h14v-2z"/%3E%3Cpath d="M16 3C8.8 3 3 8.8 3 16s5.8 13 13 13 13-5.8 13-13S23.2 3 16 3zm0 24C10 27 5 22 5 16S10 5 16 5s11 5 11 11-5 11-11 11z"/%3E%3C/svg%3E');
+    background-color: #fff;
+    background-size: 20px 20px;
+    background-position: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.custom-zoom-out:hover {
+    background-color: #f4f4f4;
+}
+
+#info-pane .info-port {
+    font-size: 13px;
+    color: #8f8; /* A nice "terminal green" */
+    font-style: italic;
+    font-family: monospace;
+    margin-top: 4px;
+}
+
+#info-pane .info-ip {
+    font-size: 13px;
+    color: #8af; /* A light blue/cyan */
+    font-family: monospace;
+    margin-top: 4px;
+}
+
+#stats-pane {
+    position: absolute;
+    bottom: 10px; /* <-- This is the change */
+    left: 10px;
+    z-index: 1000;
+    background-color: rgba(40, 40, 40, 0.8);
+    border: 1px solid #777;
+    padding: 10px;
+    border-radius: 5px;
+    font-family: Arial, sans-serif;
+    color: #fff;
+    width: 250px; /* Give it a fixed width */
+}
+
+#stats-pane h3 {
+    font-size: 14px;
+    margin: 0 0 5px 0;
+    padding-bottom: 3px;
+    border-bottom: 1px solid #555;
+    color: #eee;
+}
+
+#stats-pane ul {
+    list-style: none;
+    margin: 0 0 10px 0;
+    padding: 0;
+    font-size: 13px;
+}
+
+#stats-pane li {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+}
+
+#stats-pane .stat-name {
+    color: #ddd;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 10px;
+}
+
+#stats-pane .stat-count {
+    color: #8f8; /* Use the same green as the port */
+    font-weight: bold;
+    font-family: monospace;
+}
