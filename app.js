@@ -147,6 +147,10 @@ document.addEventListener('DOMContentLoaded', function() {
             popupContent += '<p class="info-asn">' + popupAsnOrg + '</p>';
         }
         if (remoteIP) { popupContent += '<p class="info-ip">' + remoteIP + '</p>'; }
+        if (data.greynoise) {
+            popupContent += '<hr class="info-divider">';
+            popupContent += '<p class="info-greynoise">GREYNOISE</p>';
+        }
         popupContent += '<p class="info-port">' + serviceName + '</p>'; 
         var dotLocation = (data.dir === "out") ? end : start;
         var circle = L.circleMarker(dotLocation, {
