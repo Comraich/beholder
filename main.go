@@ -134,8 +134,8 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- IP/Web Server Functions (Unchanged) ---
-func getPublicIP() (string, error) { /* ... (function is unchanged) ... */
+// --- IP/Web Server Functions ---
+func getPublicIP() (string, error)
 	resp, err := http.Get("https://api.ipify.org")
 	if err != nil {
 		return "", err
@@ -151,7 +151,7 @@ func getPublicIP() (string, error) { /* ... (function is unchanged) ... */
 	}
 	return ip, nil
 }
-func updatePublicIPLoop() { /* ... (function is unchanged) ... */
+func updatePublicIPLoop() {
 	log.Println("Starting public IP auto-updater...")
 	for {
 		ip, err := getPublicIP()
@@ -169,9 +169,9 @@ func updatePublicIPLoop() { /* ... (function is unchanged) ... */
 	}
 }
 
-// --- Stats Functions (MODIFIED) ---
+// --- Stats Functions ---
 
-func getTop5(m *sync.Map) []StatItem { /* ... (function is unchanged) ... */
+func getTop5(m *sync.Map) []StatItem {
 	var items []StatItem
 	m.Range(func(key, value interface{}) bool {
 		items = append(items, StatItem{
@@ -189,7 +189,7 @@ func getTop5(m *sync.Map) []StatItem { /* ... (function is unchanged) ... */
 	return items
 }
 
-func incrementCounter(m *sync.Map, key string) { /* ... (function is unchanged) ... */
+func incrementCounter(m *sync.Map, key string) {
 	if key == "" {
 		return
 	}
@@ -221,14 +221,13 @@ func cleanupSeenPairsLoop() {
 	}
 }
 
-// --- MODIFIED: Stats broadcasting goroutine ---
+// --- Stats broadcasting goroutine ---
 func broadcastStatsLoop() {
 	log.Println("Starting stats broadcaster...")
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// --- MODIFIED: Create new maps and swap them ---
 		// This atomically resets the counters *without*
 		// blocking the main packet capture loop.
 		newCountryCounts := &sync.Map{}
@@ -239,7 +238,6 @@ func broadcastStatsLoop() {
 
 		countryCounts = newCountryCounts
 		asnCounts = newAsnCounts
-		// --- END MODIFIED ---
 
 		// Build the stats data from the *old* maps
 		stats := StatsData{
@@ -256,7 +254,7 @@ func broadcastStatsLoop() {
 	}
 }
 
-// --- Main Application (MODIFIED) ---
+// --- Main Application ---
 func main() {
 	var err error
 	dbCity, err = maxminddb.Open(dbCityPath)
@@ -285,7 +283,7 @@ func main() {
 	go updatePublicIPLoop()
 	go broadcastStatsLoop()
 
-	// --- NEW: Start the janitor ---
+	// --- Start the janitor ---
 	go cleanupSeenPairsLoop()
 
 	// Start Web Server
@@ -341,7 +339,7 @@ func main() {
 		}
 	}()
 
-	// Start Packet Capture (Unchanged)
+	// Start Packet Capture
 	handle, err := pcap.OpenLive(iface, snapshotLen, promiscuous, timeout)
 	if err != nil {
 		log.Fatal(err)
@@ -354,9 +352,9 @@ func main() {
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	log.Printf("Capturing packets on interface %s...\n", iface)
 
-	// --- Step 4: Main Loop (MODIFIED) ---
+	// --- Step 4: Main Loop ---
 	for packet := range packetSource.Packets() {
-		// ... (Get Transport Layer - Unchanged) ...
+		// Get Transport Layer ...
 		transportLayer := packet.TransportLayer()
 		if transportLayer == nil {
 			continue
@@ -372,7 +370,7 @@ func main() {
 			continue
 		}
 
-		// ... (Get Network Layer - Unchanged) ...
+		// Get Network Layer
 		netLayer := packet.NetworkLayer()
 		if netLayer == nil {
 			continue
@@ -387,7 +385,7 @@ func main() {
 			continue
 		}
 
-		// ... (Directional Logic - Unchanged) ...
+		// Directional Logic
 		ipLock.RLock()
 		currentPublicIP := MY_PUBLIC_IP
 		ipLock.RUnlock()
@@ -407,12 +405,12 @@ func main() {
 			continue
 		}
 
-		// --- Debounce Check (MODIFIED) ---
+		// --- Debounce Check ---
 		// We *don't* check if it's too soon. We *always* count.
 		// We only check if it's too soon to *draw the line*.
 		pairKey := direction + "->" + remoteIP.String() + ":" + fmt.Sprintf("%d", servicePort)
 
-		// --- GeoIP Lookup (Unchanged) ---
+		// --- GeoIP Lookup ---
 		var remoteRecord GeoRecord
 		var homeRecord GeoRecord
 		var remoteAsnRecord ASRecord
@@ -426,7 +424,7 @@ func main() {
 		}
 		_ = dbASN.Lookup(homeIP, &homeAsnRecord)
 
-		// --- Increment Counters (Unchanged) ---
+		// --- Increment Counters ---
 		if direction == "in" {
 			incrementCounter(countryCounts, remoteRecord.Country.Names["en"])
 			incrementCounter(asnCounts, remoteAsnRecord.AutonomousSystemOrganization)
@@ -435,7 +433,7 @@ func main() {
 			incrementCounter(asnCounts, remoteAsnRecord.AutonomousSystemOrganization)
 		}
 
-		// --- Step 5: BROADCAST (MODIFIED) ---
+		// --- Step 5: BROADCAST ---
 
 		// Check if we should *draw the line* (debounce)
 		if lastSeenTime, found := seenPairs.Load(pairKey); found {
@@ -447,13 +445,13 @@ func main() {
 
 		var data GeoData
 		if direction == "out" {
-			data = GeoData{ /* ... (unchanged) ... */
+			data = GeoData{
 				SrcLat: homeRecord.Location.Latitude, SrcLon: homeRecord.Location.Longitude, SrcCity: homeRecord.City.Names["en"], SrcCountry: homeRecord.Country.Names["en"], SrcAsnOrg: homeAsnRecord.AutonomousSystemOrganization,
 				DstLat: remoteRecord.Location.Latitude, DstLon: remoteRecord.Location.Longitude, DstCity: remoteRecord.City.Names["en"], DstCountry: remoteRecord.Country.Names["en"], DstAsnOrg: remoteAsnRecord.AutonomousSystemOrganization,
 				Direction: "out", ServicePort: servicePort, Protocol: protocol, RemoteIP: remoteIP.String(),
 			}
 		} else {
-			data = GeoData{ /* ... (unchanged) ... */
+			data = GeoData{
 				SrcLat: remoteRecord.Location.Latitude, SrcLon: remoteRecord.Location.Longitude, SrcCity: remoteRecord.City.Names["en"], SrcCountry: remoteRecord.Country.Names["en"], SrcAsnOrg: remoteAsnRecord.AutonomousSystemOrganization,
 				DstLat: homeRecord.Location.Latitude, DstLon: homeRecord.Location.Longitude, DstCity: homeRecord.City.Names["en"], DstCountry: homeRecord.Country.Names["en"], DstAsnOrg: homeAsnRecord.AutonomousSystemOrganization,
 				Direction: "in", ServicePort: servicePort, Protocol: protocol, RemoteIP: remoteIP.String(),
@@ -464,7 +462,7 @@ func main() {
 	}
 }
 
-// isPrivateIP function (Unchanged)
+// isPrivateIP function
 func isPrivateIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return true
