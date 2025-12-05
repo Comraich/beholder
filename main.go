@@ -18,7 +18,7 @@ import (
 )
 
 // --- Configuration ---
-var iface string = "en0"
+var iface string = "eth0"
 var dbCityPath string = "GeoLite2-City.mmdb"
 var dbAsnPath string = "GeoLite2-ASN.mmdb"
 var webServerPort string = ":8080"
