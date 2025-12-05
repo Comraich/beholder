@@ -51,7 +51,7 @@ document.addEventListener('DOMContentLoaded', function() {
     var topAsnsList = document.getElementById('top-asns');
 
 
-    // 3. Set up the WebSocket connection (MODIFIED)
+    // 3. Set up the WebSocket connection 
     var socket;
     function connect() {
         var wsProtocol = window.location.protocol === "https:" ? "wss://" : "ws://";
@@ -73,7 +73,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
         socket.onclose = function(event) {
             console.log("WebSocket disconnected. Reconnecting in 3 seconds...");
-            // --- NEW: Auto-reconnect ---
             setTimeout(connect, 3000); 
         };
 
@@ -83,7 +82,7 @@ document.addEventListener('DOMContentLoaded', function() {
         };
     }
     
-    connect(); // --- NEW: Initial call to connect ---
+    connect(); 
 
 
     // Reset info pane on map click
@@ -91,8 +90,8 @@ document.addEventListener('DOMContentLoaded', function() {
         infoPane.innerHTML = infoPaneDefault;
     });
 
-    // 5. Function to draw lines (Unchanged)
-    function drawConnection(data) { /* ... (function is unchanged) ... */
+    // 5. Function to draw lines 
+    function drawConnection(data) { 
         if (data.dir === "out" && !showOutgoingCheckbox.checked) { return; }
         if (data.dir === "in" && !showIncomingCheckbox.checked) { return; }
         var start = [data.srcLat, data.srcLon];
@@ -176,8 +175,8 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 3000);
     }
 
-    // getFriendlyPortName (Unchanged)
-    function getFriendlyPortName(proto, port) { /* ... (function is unchanged) ... */
+    // getFriendlyPortName 
+    function getFriendlyPortName(proto, port) { 
         if (proto === "TCP") {
             switch (port) {
                 case 80: return "HTTP";
@@ -224,4 +223,4 @@ document.addEventListener('DOMContentLoaded', function() {
         topAsnsList.innerHTML = buildListHtml(data.topASNs);
     }
 
-}); // --- END of the DOMContentLoaded wrapper ---
+}); 

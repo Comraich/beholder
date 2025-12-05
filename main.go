@@ -17,15 +17,15 @@ import (
 	"github.com/oschwald/maxminddb-golang"
 )
 
-// --- Configuration (Unchanged) ---
-var iface string = "eth0"
+// --- Configuration ---
+var iface string = "en0"
 var dbCityPath string = "GeoLite2-City.mmdb"
 var dbAsnPath string = "GeoLite2-ASN.mmdb"
 var webServerPort string = ":8080"
 
 // ---------------------
 
-// --- Global Variables (Unchanged) ---
+// --- Global Variables ---
 var (
 	snapshotLen      int32         = 1024
 	promiscuous      bool          = true
@@ -45,7 +45,7 @@ var (
 	asnCounts     = &sync.Map{}
 )
 
-// --- Structs (Unchanged) ---
+// --- Structs ---
 type WebSocketMessage struct {
 	Type string      `json:"type"`
 	Data interface{} `json:"data"`
@@ -135,7 +135,7 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- IP/Web Server Functions ---
-func getPublicIP() (string, error)
+func getPublicIP() (string, error) {
 	resp, err := http.Get("https://api.ipify.org")
 	if err != nil {
 		return "", err
