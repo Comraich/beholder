@@ -1,18 +1,18 @@
-// --- NEW: Wait for the DOM to be loaded ---
 document.addEventListener('DOMContentLoaded', function() {
 
     // 1. Initialize the map
-    var map = L.map('map', { /* ... (map init is unchanged) ... */
+    var map = L.map('map', { 
         minZoom: 2,
         maxBounds: [
             [-90, -180],
             [90, 180]
         ],
+        worldCopyJump: false,
         zoomControl: true
     }).setView([20, 0], 2);
 
     // Create the custom Zoom Out button
-    L.Control.ZoomOut = L.Control.extend({ /* ... (button code is unchanged) ... */
+    L.Control.ZoomOut = L.Control.extend({ 
         onAdd: function(map) {
             var button = L.DomUtil.create('a', 'custom-zoom-out');
             button.title = 'Zoom out to world';
@@ -35,7 +35,8 @@ document.addEventListener('DOMContentLoaded', function() {
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { /* ... (unchanged) ... */
         attribution: '&copy; <a href="https.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
         maxZoom: 19,
-        minZoom: 2
+        minZoom: 2,
+        noWrap: true
     }).addTo(map);
 
     // Add the custom button to the map

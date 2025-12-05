@@ -2,9 +2,7 @@
 
 ## Simple web app that visualizes internet traffic on a network, written in Go and JavaScript
 
-### Instructions for use
-
-#### Requirements
+### Requirements
 
 You will need a router or firewall that is capable of mirroring ports. Some routers have this capability built in, notaqbly routers running DDwrt, OpnSensen, and PFSense. Most enterprise or "prosumer"-devices have this capability.
 
@@ -26,7 +24,7 @@ If your firewall is unable to provide a mirrored port, you can get around this b
 
 Ubequity Networks line of Flex switches are a good cheap alternative that allow for mirrored ports.
 
-#### Installation
+### Installation
 
 It is assumed that the server you are installing to is a Linux-server. I have successfully tested the software on Fedora, Ubuntu, Debian, and NixOS. It was written on a Macbook, so it is likely to work just fine on MacOS as well. Theoretically it should work on Windows too, but I have never tried it.
 
@@ -38,7 +36,7 @@ The installer will now create a folder under /opt and install the systemd servic
 
 If you intend to run this software in a larger scale than your house, I would suggest putting the service behind a reverse proxy. I have used CloudFlare as a reverse proxy with great success.
 
-#### Comments / Suggestions / Issues / Bugs / etc
+### Comments / Suggestions / Issues / Bugs / etc
 
 Pull requests are welcome and encouraged.
 
@@ -48,7 +46,7 @@ Comments and suggestions can be sent to me at <simon@gale-huset.net>.
 
 If you like this software, tell your friends about it. There is no cost involved, and it helps me spread my creation. If you didn't like it, this would be a nice time for some quiet contemplation.
 
-#### Copyright / legal stuff / all that jazz
+### Copyright / legal stuff / all that jazz
 
 This software is (C) Simon Bruce-Cassidy and Comraich, 2025.
 
