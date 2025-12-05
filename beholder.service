@@ -1,0 +1,27 @@
+[Unit]
+Description=Beholder Traffic Map
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=beholder
+Group=beholder
+
+# Set the working directory
+WorkingDirectory=/opt/beholder
+
+# Set the command to run
+# We must use the full path to the binary
+ExecStart=/opt/beholder/beholder
+
+# Set permissions for packet capture
+# This gives the binary permission to open the network interface
+# This is MUCH safer than running the whole service as root
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
