@@ -82,8 +82,9 @@ var (
 	upgrader         = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
-	MY_PUBLIC_IP  string
-	ipLock        sync.RWMutex
+	MY_PUBLIC_IP    string
+	MY_PUBLIC_IP_V6 string
+	ipLock          sync.RWMutex
 	countryCounts atomic.Pointer[sync.Map]
 	asnCounts     atomic.Pointer[sync.Map]
 )
@@ -192,8 +193,8 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- IP/Web Server Functions ---
-func getPublicIP() (string, error) {
-	resp, err := http.Get("https://api.ipify.org")
+func getPublicIP(url string) (string, error) {
+	resp, err := http.Get(url)
 	if err != nil {
 		return "", err
 	}
@@ -204,21 +205,40 @@ func getPublicIP() (string, error) {
 	}
 	ip := string(body)
 	if net.ParseIP(ip) == nil {
-		return "", fmt.Errorf("not a valid IP from api.ipify.org: %s", ip)
+		return "", fmt.Errorf("not a valid IP from %s: %s", url, ip)
 	}
 	return ip, nil
 }
+
+func getPublicIPv4() (string, error) {
+	return getPublicIP("https://api.ipify.org")
+}
+
+func getPublicIPv6() (string, error) {
+	return getPublicIP("https://api6.ipify.org")
+}
+
 func updatePublicIPLoop() {
 	log.Println("Starting public IP auto-updater...")
 	for {
-		ip, err := getPublicIP()
-		if err != nil {
-			log.Printf("Error updating public IP: %v", err)
+		// Update IPv4
+		if ip, err := getPublicIPv4(); err != nil {
+			log.Printf("Error updating public IPv4: %v", err)
 		} else {
 			ipLock.Lock()
 			if ip != MY_PUBLIC_IP {
-				log.Printf("Public IP changed! New IP: %s", ip)
+				log.Printf("Public IPv4 changed: %s", ip)
 				MY_PUBLIC_IP = ip
+			}
+			ipLock.Unlock()
+		}
+
+		// Update IPv6 (may fail if no IPv6 connectivity)
+		if ip, err := getPublicIPv6(); err == nil {
+			ipLock.Lock()
+			if ip != MY_PUBLIC_IP_V6 {
+				log.Printf("Public IPv6 changed: %s", ip)
+				MY_PUBLIC_IP_V6 = ip
 			}
 			ipLock.Unlock()
 		}
@@ -329,14 +349,24 @@ func main() {
 	defer dbASN.Close()
 	log.Println("Successfully opened GeoIP ASN database.")
 
-	initialIP, err := getPublicIP()
+	initialIP, err := getPublicIPv4()
 	if err != nil {
-		log.Fatalf("Could not get public IP on startup: %v", err)
+		log.Fatalf("Could not get public IPv4 on startup: %v", err)
 	}
 	ipLock.Lock()
 	MY_PUBLIC_IP = initialIP
 	ipLock.Unlock()
-	log.Printf("My public IP is: %s", initialIP)
+	log.Printf("My public IPv4: %s", initialIP)
+
+	// Try to get IPv6 (optional - may not have IPv6 connectivity)
+	if initialIPv6, err := getPublicIPv6(); err == nil {
+		ipLock.Lock()
+		MY_PUBLIC_IP_V6 = initialIPv6
+		ipLock.Unlock()
+		log.Printf("My public IPv6: %s", initialIPv6)
+	} else {
+		log.Println("No IPv6 connectivity detected")
+	}
 
 	go updatePublicIPLoop()
 	go broadcastStatsLoop()
@@ -414,20 +444,21 @@ func main() {
 		case *layers.IPv4:
 			srcIP, dstIP = ip.SrcIP, ip.DstIP
 		case *layers.IPv6:
-			continue
+			srcIP, dstIP = ip.SrcIP, ip.DstIP
 		default:
 			continue
 		}
 
-		// Directional Logic
+		// Directional Logic - check against both IPv4 and IPv6 public IPs
 		ipLock.RLock()
-		currentPublicIP := MY_PUBLIC_IP
+		publicIPv4 := MY_PUBLIC_IP
+		publicIPv6 := MY_PUBLIC_IP_V6
 		ipLock.RUnlock()
-		if currentPublicIP == "" {
-			continue
-		}
-		srcIsHome := srcIP.String() == currentPublicIP
-		dstIsHome := dstIP.String() == currentPublicIP
+
+		srcStr := srcIP.String()
+		dstStr := dstIP.String()
+		srcIsHome := srcStr == publicIPv4 || srcStr == publicIPv6
+		dstIsHome := dstStr == publicIPv4 || dstStr == publicIPv6
 		var remoteIP, homeIP net.IP
 		var direction string
 		var servicePort int
