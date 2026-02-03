@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/gopacket"
@@ -83,8 +84,8 @@ var (
 	}
 	MY_PUBLIC_IP  string
 	ipLock        sync.RWMutex
-	countryCounts = &sync.Map{}
-	asnCounts     = &sync.Map{}
+	countryCounts atomic.Pointer[sync.Map]
+	asnCounts     atomic.Pointer[sync.Map]
 )
 
 // --- Structs ---
@@ -270,24 +271,19 @@ func broadcastStatsLoop() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// This atomically resets the counters *without*
-		// blocking the main packet capture loop.
+		// Atomically swap in new maps and get the old ones
 		newCountryCounts := &sync.Map{}
 		newAsnCounts := &sync.Map{}
 
-		oldCountryCounts := countryCounts
-		oldAsnCounts := asnCounts
+		oldCountryCounts := countryCounts.Swap(newCountryCounts)
+		oldAsnCounts := asnCounts.Swap(newAsnCounts)
 
-		countryCounts = newCountryCounts
-		asnCounts = newAsnCounts
-
-		// Build the stats data from the *old* maps
+		// Build the stats data from the old maps
 		stats := StatsData{
 			TopCountries: getTop5(oldCountryCounts),
 			TopASNs:      getTop5(oldAsnCounts),
 		}
 
-		// Wrap it in our WebSocketMessage
 		msg := WebSocketMessage{
 			Type: "stats",
 			Data: stats,
@@ -299,6 +295,10 @@ func broadcastStatsLoop() {
 // --- Main Application ---
 func main() {
 	loadConfig()
+
+	// Initialize atomic counter maps
+	countryCounts.Store(&sync.Map{})
+	asnCounts.Store(&sync.Map{})
 
 	var err error
 	dbCity, err = maxminddb.Open(dbCityPath)
@@ -445,13 +445,8 @@ func main() {
 		_ = dbASN.Lookup(homeIP, &homeAsnRecord)
 
 		// --- Increment Counters ---
-		if direction == "in" {
-			incrementCounter(countryCounts, remoteRecord.Country.Names["en"])
-			incrementCounter(asnCounts, remoteAsnRecord.AutonomousSystemOrganization)
-		} else { // "out"
-			incrementCounter(countryCounts, remoteRecord.Country.Names["en"])
-			incrementCounter(asnCounts, remoteAsnRecord.AutonomousSystemOrganization)
-		}
+		incrementCounter(countryCounts.Load(), remoteRecord.Country.Names["en"])
+		incrementCounter(asnCounts.Load(), remoteAsnRecord.AutonomousSystemOrganization)
 
 		// --- Step 5: BROADCAST ---
 
