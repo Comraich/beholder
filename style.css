@@ -161,7 +161,7 @@ input:checked + .slider:before {
 
 #stats-pane {
     position: absolute;
-    bottom: 10px; /* <-- This is the change */
+    bottom: 10px;
     left: 10px;
     z-index: 1000;
     background-color: rgba(40, 40, 40, 0.8);
@@ -170,7 +170,9 @@ input:checked + .slider:before {
     border-radius: 5px;
     font-family: Arial, sans-serif;
     color: #fff;
-    width: 250px; /* Give it a fixed width */
+    width: 320px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
 }
 
 #stats-pane h3 {
@@ -206,4 +208,54 @@ input:checked + .slider:before {
     color: #8f8; /* Use the same green as the port */
     font-weight: bold;
     font-family: monospace;
+}
+
+/* History Section Styles */
+#history-section {
+    border-top: 1px solid #555;
+    margin-top: 10px;
+    padding-top: 10px;
+}
+
+.history-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.history-header h3 {
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+#history-range {
+    background-color: #333;
+    color: #fff;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+#history-range:hover {
+    border-color: #777;
+}
+
+.chart-container {
+    margin-bottom: 15px;
+}
+
+.chart-container h4 {
+    font-size: 12px;
+    color: #aaa;
+    margin: 0 0 5px 0;
+    font-weight: normal;
+}
+
+.chart-container canvas {
+    width: 100% !important;
+    height: 120px !important;
 }

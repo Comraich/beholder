@@ -35,3 +35,5 @@ go.work.sum
 beholder
 *.lock
 *.sh
+*.mmdb
+beholder_stats.db*

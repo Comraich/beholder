@@ -1,6 +1,8 @@
 package main
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,16 +23,19 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 	"github.com/oschwald/maxminddb-golang"
+	_ "modernc.org/sqlite"
 )
 
 // --- Configuration ---
 var (
-	iface          string
-	dbCityPath     string
-	dbAsnPath      string
-	webServerPort  string
-	staticDir      string
-	allowedOrigins []string
+	iface              string
+	dbCityPath         string
+	dbAsnPath          string
+	webServerPort      string
+	staticDir          string
+	allowedOrigins     []string
+	statsDBPath        string
+	statsRetentionDays int
 )
 
 func loadConfig() {
@@ -62,12 +68,23 @@ func loadConfig() {
 		}
 	}
 
+	// Stats database configuration
+	statsDBPath = getEnv("BEHOLDER_STATS_DB", "beholder_stats.db")
+	retentionStr := getEnv("BEHOLDER_STATS_RETENTION_DAYS", "30")
+	var err error
+	statsRetentionDays, err = strconv.Atoi(retentionStr)
+	if err != nil || statsRetentionDays < 1 {
+		statsRetentionDays = 30
+	}
+
 	log.Printf("Configuration loaded:")
 	log.Printf("  Interface: %s", iface)
 	log.Printf("  Port: %s", webServerPort)
 	log.Printf("  City DB: %s", dbCityPath)
 	log.Printf("  ASN DB: %s", dbAsnPath)
 	log.Printf("  Static Dir: %s", staticDir)
+	log.Printf("  Stats DB: %s", statsDBPath)
+	log.Printf("  Stats Retention: %d days", statsRetentionDays)
 	if len(allowedOrigins) > 0 {
 		log.Printf("  Allowed Origins: %v", allowedOrigins)
 	} else {
@@ -127,15 +144,33 @@ var (
 	seenPairs        = &sync.Map{}
 	connections      = make(map[*websocket.Conn]bool)
 	connLock         = sync.RWMutex{}
-	upgrader = websocket.Upgrader{
+	upgrader         = websocket.Upgrader{
 		CheckOrigin: checkOrigin,
 	}
 	MY_PUBLIC_IP    string
 	MY_PUBLIC_IP_V6 string
 	ipLock          sync.RWMutex
-	countryCounts atomic.Pointer[sync.Map]
-	asnCounts     atomic.Pointer[sync.Map]
+	countryCounts   atomic.Pointer[sync.Map]
+	asnCounts       atomic.Pointer[sync.Map]
+
+	// Historical stats
+	statsDB      *sql.DB
+	statsChannel = make(chan statsEvent, 10000) // Buffered channel for non-blocking sends
 )
+
+// statsEvent represents a single packet event for historical aggregation
+type statsEvent struct {
+	country string
+	asnOrg  string
+}
+
+// hourlyBuffer holds in-memory aggregations before flushing to SQLite
+type hourlyBuffer struct {
+	sync.Mutex
+	countries map[string]int
+	asns      map[string]int
+	hourBucket int64
+}
 
 // --- Structs ---
 type WebSocketMessage struct {
@@ -325,6 +360,408 @@ func incrementCounter(m *sync.Map, key string) {
 	m.Store(key, count+1)
 }
 
+// --- Historical Stats Database Functions ---
+
+func initStatsDB() error {
+	var err error
+	statsDB, err = sql.Open("sqlite", statsDBPath)
+	if err != nil {
+		return fmt.Errorf("failed to open stats database: %w", err)
+	}
+
+	// Set pragmas for better performance
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA cache_size=10000",
+	}
+	for _, pragma := range pragmas {
+		if _, err := statsDB.Exec(pragma); err != nil {
+			return fmt.Errorf("failed to set pragma: %w", err)
+		}
+	}
+
+	// Create tables
+	schema := `
+	CREATE TABLE IF NOT EXISTS country_stats (
+		country TEXT NOT NULL,
+		hour_bucket INTEGER NOT NULL,
+		packet_count INTEGER NOT NULL DEFAULT 0,
+		UNIQUE(country, hour_bucket)
+	);
+
+	CREATE TABLE IF NOT EXISTS asn_stats (
+		asn_org TEXT NOT NULL,
+		hour_bucket INTEGER NOT NULL,
+		packet_count INTEGER NOT NULL DEFAULT 0,
+		UNIQUE(asn_org, hour_bucket)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_country_stats_hour ON country_stats(hour_bucket);
+	CREATE INDEX IF NOT EXISTS idx_asn_stats_hour ON asn_stats(hour_bucket);
+	`
+	if _, err := statsDB.Exec(schema); err != nil {
+		return fmt.Errorf("failed to create schema: %w", err)
+	}
+
+	return nil
+}
+
+func getCurrentHourBucket() int64 {
+	return time.Now().Truncate(time.Hour).Unix()
+}
+
+func newHourlyBuffer() *hourlyBuffer {
+	return &hourlyBuffer{
+		countries:  make(map[string]int),
+		asns:       make(map[string]int),
+		hourBucket: getCurrentHourBucket(),
+	}
+}
+
+func (b *hourlyBuffer) add(evt statsEvent) {
+	b.Lock()
+	defer b.Unlock()
+
+	// Check if we've moved to a new hour
+	currentHour := getCurrentHourBucket()
+	if currentHour != b.hourBucket {
+		// Flush old data and reset
+		b.flushLocked()
+		b.hourBucket = currentHour
+	}
+
+	if evt.country != "" {
+		b.countries[evt.country]++
+	}
+	if evt.asnOrg != "" {
+		b.asns[evt.asnOrg]++
+	}
+}
+
+func (b *hourlyBuffer) flush() {
+	b.Lock()
+	defer b.Unlock()
+	b.flushLocked()
+}
+
+func (b *hourlyBuffer) flushLocked() {
+	if len(b.countries) == 0 && len(b.asns) == 0 {
+		return
+	}
+
+	tx, err := statsDB.Begin()
+	if err != nil {
+		log.Printf("Stats DB transaction error: %v", err)
+		return
+	}
+	defer tx.Rollback()
+
+	// UPSERT countries
+	countryStmt, err := tx.Prepare(`
+		INSERT INTO country_stats (country, hour_bucket, packet_count)
+		VALUES (?, ?, ?)
+		ON CONFLICT(country, hour_bucket) DO UPDATE SET
+		packet_count = packet_count + excluded.packet_count
+	`)
+	if err != nil {
+		log.Printf("Stats DB prepare error (country): %v", err)
+		return
+	}
+	defer countryStmt.Close()
+
+	for country, count := range b.countries {
+		if _, err := countryStmt.Exec(country, b.hourBucket, count); err != nil {
+			log.Printf("Stats DB insert error (country): %v", err)
+		}
+	}
+
+	// UPSERT ASNs
+	asnStmt, err := tx.Prepare(`
+		INSERT INTO asn_stats (asn_org, hour_bucket, packet_count)
+		VALUES (?, ?, ?)
+		ON CONFLICT(asn_org, hour_bucket) DO UPDATE SET
+		packet_count = packet_count + excluded.packet_count
+	`)
+	if err != nil {
+		log.Printf("Stats DB prepare error (asn): %v", err)
+		return
+	}
+	defer asnStmt.Close()
+
+	for asn, count := range b.asns {
+		if _, err := asnStmt.Exec(asn, b.hourBucket, count); err != nil {
+			log.Printf("Stats DB insert error (asn): %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("Stats DB commit error: %v", err)
+		return
+	}
+
+	// Clear the buffer
+	b.countries = make(map[string]int)
+	b.asns = make(map[string]int)
+}
+
+func aggregatorLoop() {
+	log.Println("Starting stats aggregator...")
+	buffer := newHourlyBuffer()
+	flushTicker := time.NewTicker(1 * time.Minute)
+	defer flushTicker.Stop()
+
+	for {
+		select {
+		case evt := <-statsChannel:
+			buffer.add(evt)
+		case <-flushTicker.C:
+			buffer.flush()
+		}
+	}
+}
+
+func cleanupStatsLoop() {
+	log.Println("Starting stats cleanup scheduler...")
+
+	for {
+		now := time.Now()
+		// Calculate next 3:00 AM
+		next3AM := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, now.Location())
+		if now.After(next3AM) {
+			next3AM = next3AM.Add(24 * time.Hour)
+		}
+		sleepDuration := next3AM.Sub(now)
+		log.Printf("Next stats cleanup scheduled for %s", next3AM.Format(time.RFC3339))
+
+		time.Sleep(sleepDuration)
+		cleanupOldStats()
+	}
+}
+
+func cleanupOldStats() {
+	log.Println("Running stats cleanup...")
+	cutoff := time.Now().Add(-time.Duration(statsRetentionDays) * 24 * time.Hour).Unix()
+
+	// Delete in batches to avoid long locks
+	batchSize := 1000
+	tables := []string{"country_stats", "asn_stats"}
+
+	for _, table := range tables {
+		for {
+			result, err := statsDB.Exec(
+				fmt.Sprintf("DELETE FROM %s WHERE hour_bucket < ? LIMIT ?", table),
+				cutoff, batchSize,
+			)
+			if err != nil {
+				log.Printf("Stats cleanup error (%s): %v", table, err)
+				break
+			}
+			rowsAffected, _ := result.RowsAffected()
+			if rowsAffected < int64(batchSize) {
+				break // No more rows to delete
+			}
+		}
+	}
+
+	// VACUUM to reclaim space
+	if _, err := statsDB.Exec("VACUUM"); err != nil {
+		log.Printf("Stats VACUUM error: %v", err)
+	}
+
+	log.Println("Stats cleanup completed")
+}
+
+// --- API Handlers for Historical Stats ---
+
+type TopStatsResponse struct {
+	Items []StatItem `json:"items"`
+	Range string     `json:"range"`
+	Type  string     `json:"type"`
+}
+
+type TimeSeriesPoint struct {
+	Timestamp int64 `json:"timestamp"`
+	Count     int   `json:"count"`
+}
+
+type TimeSeriesResponse struct {
+	Name   string            `json:"name"`
+	Points []TimeSeriesPoint `json:"points"`
+	Range  string            `json:"range"`
+	Type   string            `json:"type"`
+}
+
+func parseRange(rangeStr string) (time.Duration, error) {
+	switch rangeStr {
+	case "24h":
+		return 24 * time.Hour, nil
+	case "7d":
+		return 7 * 24 * time.Hour, nil
+	case "30d":
+		return 30 * 24 * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("invalid range: %s (use 24h, 7d, or 30d)", rangeStr)
+	}
+}
+
+func handleStatsTop(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	rangeStr := r.URL.Query().Get("range")
+	if rangeStr == "" {
+		rangeStr = "24h"
+	}
+	rangeDuration, err := parseRange(rangeStr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	statsType := r.URL.Query().Get("type")
+	if statsType != "country" && statsType != "asn" {
+		http.Error(w, "type must be 'country' or 'asn'", http.StatusBadRequest)
+		return
+	}
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 10
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	cutoff := time.Now().Add(-rangeDuration).Unix()
+
+	var query string
+	if statsType == "country" {
+		query = `
+			SELECT country, SUM(packet_count) as total
+			FROM country_stats
+			WHERE hour_bucket >= ?
+			GROUP BY country
+			ORDER BY total DESC
+			LIMIT ?
+		`
+	} else {
+		query = `
+			SELECT asn_org, SUM(packet_count) as total
+			FROM asn_stats
+			WHERE hour_bucket >= ?
+			GROUP BY asn_org
+			ORDER BY total DESC
+			LIMIT ?
+		`
+	}
+
+	rows, err := statsDB.Query(query, cutoff, limit)
+	if err != nil {
+		log.Printf("Stats query error: %v", err)
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var items []StatItem
+	for rows.Next() {
+		var item StatItem
+		if err := rows.Scan(&item.Name, &item.Count); err != nil {
+			log.Printf("Stats scan error: %v", err)
+			continue
+		}
+		items = append(items, item)
+	}
+
+	if items == nil {
+		items = []StatItem{}
+	}
+
+	response := TopStatsResponse{
+		Items: items,
+		Range: rangeStr,
+		Type:  statsType,
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+func handleStatsTimeseries(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	rangeStr := r.URL.Query().Get("range")
+	if rangeStr == "" {
+		rangeStr = "24h"
+	}
+	rangeDuration, err := parseRange(rangeStr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	statsType := r.URL.Query().Get("type")
+	if statsType != "country" && statsType != "asn" {
+		http.Error(w, "type must be 'country' or 'asn'", http.StatusBadRequest)
+		return
+	}
+
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		http.Error(w, "name parameter required", http.StatusBadRequest)
+		return
+	}
+
+	cutoff := time.Now().Add(-rangeDuration).Unix()
+
+	var query string
+	if statsType == "country" {
+		query = `
+			SELECT hour_bucket, packet_count
+			FROM country_stats
+			WHERE country = ? AND hour_bucket >= ?
+			ORDER BY hour_bucket ASC
+		`
+	} else {
+		query = `
+			SELECT hour_bucket, packet_count
+			FROM asn_stats
+			WHERE asn_org = ? AND hour_bucket >= ?
+			ORDER BY hour_bucket ASC
+		`
+	}
+
+	rows, err := statsDB.Query(query, name, cutoff)
+	if err != nil {
+		log.Printf("Stats timeseries query error: %v", err)
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var points []TimeSeriesPoint
+	for rows.Next() {
+		var point TimeSeriesPoint
+		if err := rows.Scan(&point.Timestamp, &point.Count); err != nil {
+			log.Printf("Stats timeseries scan error: %v", err)
+			continue
+		}
+		points = append(points, point)
+	}
+
+	if points == nil {
+		points = []TimeSeriesPoint{}
+	}
+
+	response := TimeSeriesResponse{
+		Name:   name,
+		Points: points,
+		Range:  rangeStr,
+		Type:   statsType,
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
 // --- NEW: Goroutine to clean up the debounce cache ---
 func cleanupSeenPairsLoop() {
 	log.Println("Starting debounce cache janitor...")
@@ -383,6 +820,14 @@ func main() {
 	asnCounts.Store(&sync.Map{})
 
 	var err error
+
+	// Initialize SQLite stats database
+	if err = initStatsDB(); err != nil {
+		log.Fatalf("Failed to initialize stats database: %v", err)
+	}
+	defer statsDB.Close()
+	log.Println("Successfully opened stats database.")
+
 	dbCity, err = maxminddb.Open(dbCityPath)
 	if err != nil {
 		log.Fatal(err)
@@ -422,6 +867,10 @@ func main() {
 	// --- Start the janitor ---
 	go cleanupSeenPairsLoop()
 
+	// --- Start historical stats goroutines ---
+	go aggregatorLoop()
+	go cleanupStatsLoop()
+
 	// Start Web Server
 	go func() {
 		serveStatic := func(path, contentType string) http.HandlerFunc {
@@ -445,6 +894,10 @@ func main() {
 		http.HandleFunc("/favicon.ico", serveStatic("favicon.ico", "image/x-icon"))
 		http.HandleFunc("/site.webmanifest", serveStatic("site.webmanifest", "application/manifest+json"))
 		http.HandleFunc("/ws", serveWs)
+
+		// Historical stats API endpoints
+		http.HandleFunc("/api/stats/top", handleStatsTop)
+		http.HandleFunc("/api/stats/timeseries", handleStatsTimeseries)
 		log.Printf("Starting web server on %s\n", webServerPort)
 		if err := http.ListenAndServe(webServerPort, nil); err != nil {
 			log.Fatal("ListenAndServe: ", err)
@@ -538,8 +991,17 @@ func main() {
 		_ = dbASN.Lookup(homeIP, &homeAsnRecord)
 
 		// --- Increment Counters ---
-		incrementCounter(countryCounts.Load(), remoteRecord.Country.Names["en"])
-		incrementCounter(asnCounts.Load(), remoteAsnRecord.AutonomousSystemOrganization)
+		countryName := remoteRecord.Country.Names["en"]
+		asnOrgName := remoteAsnRecord.AutonomousSystemOrganization
+		incrementCounter(countryCounts.Load(), countryName)
+		incrementCounter(asnCounts.Load(), asnOrgName)
+
+		// Send to historical stats channel (non-blocking)
+		select {
+		case statsChannel <- statsEvent{country: countryName, asnOrg: asnOrgName}:
+		default:
+			// Channel full, drop event (packet capture never blocks)
+		}
 
 		// --- Step 5: BROADCAST ---
 
