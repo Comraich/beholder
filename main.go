@@ -6,6 +6,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -14,14 +16,54 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/gorilla/websocket"
+	"github.com/joho/godotenv"
 	"github.com/oschwald/maxminddb-golang"
 )
 
 // --- Configuration ---
-var iface string = "eth0"
-var dbCityPath string = "GeoLite2-City.mmdb"
-var dbAsnPath string = "GeoLite2-ASN.mmdb"
-var webServerPort string = ":8080"
+var (
+	iface         string
+	dbCityPath    string
+	dbAsnPath     string
+	webServerPort string
+	staticDir     string
+)
+
+func loadConfig() {
+	// Load .env file if it exists (ignore error if not found)
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using defaults/environment")
+	}
+
+	iface = getEnv("BEHOLDER_INTERFACE", "eth0")
+	webServerPort = getEnv("BEHOLDER_PORT", ":8080")
+	dbCityPath = getEnv("BEHOLDER_DB_CITY", "GeoLite2-City.mmdb")
+	dbAsnPath = getEnv("BEHOLDER_DB_ASN", "GeoLite2-ASN.mmdb")
+	staticDir = getEnv("BEHOLDER_STATIC_DIR", "")
+
+	// If staticDir is empty, use current working directory
+	if staticDir == "" {
+		var err error
+		staticDir, err = os.Getwd()
+		if err != nil {
+			log.Fatalf("Could not get working directory: %v", err)
+		}
+	}
+
+	log.Printf("Configuration loaded:")
+	log.Printf("  Interface: %s", iface)
+	log.Printf("  Port: %s", webServerPort)
+	log.Printf("  City DB: %s", dbCityPath)
+	log.Printf("  ASN DB: %s", dbAsnPath)
+	log.Printf("  Static Dir: %s", staticDir)
+}
+
+func getEnv(key, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists && value != "" {
+		return value
+	}
+	return defaultValue
+}
 
 // ---------------------
 
@@ -256,6 +298,8 @@ func broadcastStatsLoop() {
 
 // --- Main Application ---
 func main() {
+	loadConfig()
+
 	var err error
 	dbCity, err = maxminddb.Open(dbCityPath)
 	if err != nil {
@@ -288,52 +332,28 @@ func main() {
 
 	// Start Web Server
 	go func() {
-		const projectDir = "/home/simon/src/beholder/"
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			http.ServeFile(w, r, projectDir+"index.html")
-		})
-		http.HandleFunc("/style.css", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/css")
-			http.ServeFile(w, r, projectDir+"style.css")
-		})
-		http.HandleFunc("/app.js", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/javascript")
-			http.ServeFile(w, r, projectDir+"app.js")
-		})
-		http.HandleFunc("/leaflet.curve.js", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/javascript")
-			http.ServeFile(w, r, projectDir+"leaflet.curve.js")
-		})
-		http.HandleFunc("/apple-touch-icon.png", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "image/png")
-			http.ServeFile(w, r, projectDir+"apple-touch-icon.png")
-		})
-		http.HandleFunc("/favicon-32x32.png", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "image/png")
-			http.ServeFile(w, r, projectDir+"favicon-32x32.png")
-		})
-		http.HandleFunc("/favicon-16x16.png", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "image/png")
-			http.ServeFile(w, r, projectDir+"favicon-16x16.png")
-		})
-		http.HandleFunc("/android-chrome-192x192.png", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "image/png")
-			http.ServeFile(w, r, projectDir+"android-chrome-192x192.png")
-		})
-		http.HandleFunc("/android-chrome-512x512.png", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "image/png")
-			http.ServeFile(w, r, projectDir+"android-chrome-512x512.png")
-		})
-		http.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "image/x-icon")
-			http.ServeFile(w, r, projectDir+"favicon.ico")
-		})
-		http.HandleFunc("/site.webmanifest", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/manifest+json")
-			http.ServeFile(w, r, projectDir+"site.webmanifest")
-		})
+		serveStatic := func(path, contentType string) http.HandlerFunc {
+			return func(w http.ResponseWriter, r *http.Request) {
+				if contentType != "" {
+					w.Header().Set("Content-Type", contentType)
+				}
+				http.ServeFile(w, r, filepath.Join(staticDir, path))
+			}
+		}
+
+		http.HandleFunc("/", serveStatic("index.html", ""))
+		http.HandleFunc("/style.css", serveStatic("style.css", "text/css"))
+		http.HandleFunc("/app.js", serveStatic("app.js", "application/javascript"))
+		http.HandleFunc("/leaflet.curve.js", serveStatic("leaflet.curve.js", "application/javascript"))
+		http.HandleFunc("/apple-touch-icon.png", serveStatic("apple-touch-icon.png", "image/png"))
+		http.HandleFunc("/favicon-32x32.png", serveStatic("favicon-32x32.png", "image/png"))
+		http.HandleFunc("/favicon-16x16.png", serveStatic("favicon-16x16.png", "image/png"))
+		http.HandleFunc("/android-chrome-192x192.png", serveStatic("android-chrome-192x192.png", "image/png"))
+		http.HandleFunc("/android-chrome-512x512.png", serveStatic("android-chrome-512x512.png", "image/png"))
+		http.HandleFunc("/favicon.ico", serveStatic("favicon.ico", "image/x-icon"))
+		http.HandleFunc("/site.webmanifest", serveStatic("site.webmanifest", "application/manifest+json"))
 		http.HandleFunc("/ws", serveWs)
-		log.Printf("Starting web server on http://<your-pi-wifi-ip>%s\n", webServerPort)
+		log.Printf("Starting web server on %s\n", webServerPort)
 		if err := http.ListenAndServe(webServerPort, nil); err != nil {
 			log.Fatal("ListenAndServe: ", err)
 		}
