@@ -140,11 +140,25 @@ type ClientMessage struct {
 }
 
 func broadcast(msg WebSocketMessage) {
+	var failed []*websocket.Conn
+
 	connLock.RLock()
-	defer connLock.RUnlock()
 	for conn := range connections {
 		if err := conn.WriteJSON(msg); err != nil {
+			log.Printf("WebSocket write error: %v", err)
+			failed = append(failed, conn)
 		}
+	}
+	connLock.RUnlock()
+
+	// Remove failed connections
+	if len(failed) > 0 {
+		connLock.Lock()
+		for _, conn := range failed {
+			delete(connections, conn)
+			conn.Close()
+		}
+		connLock.Unlock()
 	}
 }
 func serveWs(w http.ResponseWriter, r *http.Request) {
