@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,11 +24,12 @@ import (
 
 // --- Configuration ---
 var (
-	iface         string
-	dbCityPath    string
-	dbAsnPath     string
-	webServerPort string
-	staticDir     string
+	iface          string
+	dbCityPath     string
+	dbAsnPath      string
+	webServerPort  string
+	staticDir      string
+	allowedOrigins []string
 )
 
 func loadConfig() {
@@ -51,12 +53,26 @@ func loadConfig() {
 		}
 	}
 
+	// Parse allowed origins (comma-separated, empty means same-origin only)
+	if origins := getEnv("BEHOLDER_ALLOWED_ORIGINS", ""); origins != "" {
+		for _, o := range strings.Split(origins, ",") {
+			if trimmed := strings.TrimSpace(o); trimmed != "" {
+				allowedOrigins = append(allowedOrigins, trimmed)
+			}
+		}
+	}
+
 	log.Printf("Configuration loaded:")
 	log.Printf("  Interface: %s", iface)
 	log.Printf("  Port: %s", webServerPort)
 	log.Printf("  City DB: %s", dbCityPath)
 	log.Printf("  ASN DB: %s", dbAsnPath)
 	log.Printf("  Static Dir: %s", staticDir)
+	if len(allowedOrigins) > 0 {
+		log.Printf("  Allowed Origins: %v", allowedOrigins)
+	} else {
+		log.Printf("  Allowed Origins: same-origin only")
+	}
 }
 
 func getEnv(key, defaultValue string) string {
@@ -64,6 +80,38 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true // No origin header (e.g., same-origin or non-browser)
+	}
+
+	// If allowed origins configured, check against list
+	if len(allowedOrigins) > 0 {
+		for _, allowed := range allowedOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		log.Printf("WebSocket origin rejected: %s", origin)
+		return false
+	}
+
+	// Default: same-origin check
+	host := r.Host
+	// Origin is like "http://example.com" or "https://example.com:8080"
+	// Extract host from origin for comparison
+	originHost := strings.TrimPrefix(origin, "https://")
+	originHost = strings.TrimPrefix(originHost, "http://")
+
+	if originHost == host {
+		return true
+	}
+
+	log.Printf("WebSocket origin rejected (not same-origin): %s", origin)
+	return false
 }
 
 // ---------------------
@@ -79,8 +127,8 @@ var (
 	seenPairs        = &sync.Map{}
 	connections      = make(map[*websocket.Conn]bool)
 	connLock         = sync.RWMutex{}
-	upgrader         = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
+	upgrader = websocket.Upgrader{
+		CheckOrigin: checkOrigin,
 	}
 	MY_PUBLIC_IP    string
 	MY_PUBLIC_IP_V6 string
