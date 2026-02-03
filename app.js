@@ -33,7 +33,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 2. Add a dark tile layer
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { /* ... (unchanged) ... */
-        attribution: '&copy; <a href="https.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
         maxZoom: 19,
         minZoom: 2,
         noWrap: true
@@ -175,20 +175,30 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 3000);
     }
 
-    // getFriendlyPortName 
-    function getFriendlyPortName(proto, port) { 
+    // getFriendlyPortName
+    function getFriendlyPortName(proto, port) {
         if (proto === "TCP") {
             switch (port) {
-                case 80: return "HTTP";
-                case 443: return "HTTPS (SSL)";
                 case 20: case 21: return "FTP";
                 case 22: return "SSH";
                 case 23: return "Telnet";
                 case 25: return "SMTP";
                 case 53: return "DNS";
+                case 80: return "HTTP";
                 case 110: return "POP3";
                 case 143: return "IMAP";
+                case 443: return "HTTPS";
+                case 465: return "SMTPS";
+                case 587: return "SMTP (Submission)";
+                case 993: return "IMAPS";
+                case 995: return "POP3S";
+                case 3306: return "MySQL";
                 case 3389: return "RDP";
+                case 5432: return "PostgreSQL";
+                case 5900: return "VNC";
+                case 6379: return "Redis";
+                case 8080: return "HTTP (Alt)";
+                case 8443: return "HTTPS (Alt)";
                 default: break;
             }
         }
@@ -198,6 +208,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 case 67: case 68: return "DHCP";
                 case 123: return "NTP";
                 case 161: return "SNMP";
+                case 443: return "QUIC";
+                case 500: return "IKE (VPN)";
+                case 1194: return "OpenVPN";
+                case 51820: return "WireGuard";
                 default: break;
             }
         }
