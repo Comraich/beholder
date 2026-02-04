@@ -68,7 +68,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function initCharts() {
         var commonOptions = {
-            responsive: false,
+            responsive: true,
             maintainAspectRatio: false,
             plugins: {
                 legend: {
