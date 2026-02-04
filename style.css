@@ -228,13 +228,6 @@ input:checked + .slider:before {
     color: #fff;
 }
 
-/* History Section Styles */
-#history-section {
-    border-top: 1px solid #555;
-    margin-top: 10px;
-    padding-top: 10px;
-}
-
 #history-range {
     background-color: #333;
     color: #fff;
@@ -249,28 +242,317 @@ input:checked + .slider:before {
     border-color: #777;
 }
 
-.chart-container {
-    margin-bottom: 15px;
+
+/* View All Stats button */
+.view-all-btn {
+    display: block;
+    width: 100%;
+    text-align: center;
+    background: #444;
+    color: #fff;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 4px;
+    margin-top: 15px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s;
 }
 
-.chart-container h4 {
-    font-size: 12px;
-    color: #aaa;
-    margin: 0 0 5px 0;
+.view-all-btn:hover {
+    background: #555;
+}
+
+/* Stats Page Styles */
+.stats-page {
+    background: #222;
+    min-height: 100vh;
+    color: #fff;
+    font-family: Arial, sans-serif;
+}
+
+.stats-header-bar {
+    display: flex;
+    align-items: center;
+    padding: 15px 20px;
+    background: #333;
+    border-bottom: 1px solid #555;
+}
+
+.stats-header-bar .back-link {
+    color: #8af;
+    text-decoration: none;
+    font-size: 14px;
+}
+
+.stats-header-bar .back-link:hover {
+    text-decoration: underline;
+}
+
+.stats-header-bar h1 {
+    margin: 0 0 0 20px;
+    font-size: 20px;
     font-weight: normal;
+    color: #fff;
 }
 
-.chart-wrapper {
+.stats-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 20px;
+    background: #2a2a2a;
+    border-bottom: 1px solid #444;
+}
+
+.stats-time-buttons,
+.stats-tabs {
+    display: flex;
+    gap: 5px;
+}
+
+.time-btn,
+.tab-btn {
+    background: #444;
+    color: #ccc;
+    border: 1px solid #555;
+    padding: 8px 16px;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 13px;
+    transition: background 0.2s, color 0.2s;
+}
+
+.time-btn:hover,
+.tab-btn:hover {
+    background: #555;
+    color: #fff;
+}
+
+.time-btn.active,
+.tab-btn.active {
+    background: #666;
+    color: #fff;
+    border-color: #777;
+}
+
+.stats-main {
+    display: flex;
+    gap: 20px;
+    padding: 20px;
+    min-height: calc(100vh - 140px);
+}
+
+.stats-table-panel {
+    flex: 0 0 400px;
+    background: #2a2a2a;
+    border-radius: 8px;
+    overflow: hidden;
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
+}
+
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.stats-table th,
+.stats-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid #444;
+}
+
+.stats-table th {
+    background: #333;
+    color: #aaa;
+    font-weight: normal;
+    font-size: 12px;
+    text-transform: uppercase;
+    position: sticky;
+    top: 0;
+}
+
+.stats-table th.sortable {
+    cursor: pointer;
+}
+
+.stats-table th.sortable:hover {
+    color: #fff;
+}
+
+.stats-table th.sortable.active {
+    color: #8af;
+}
+
+.stats-table th.sortable.active::after {
+    content: ' \25BC';
+    font-size: 10px;
+}
+
+.stats-table th.sortable.active.asc::after {
+    content: ' \25B2';
+}
+
+.stats-table .col-checkbox {
+    width: 40px;
+    text-align: center;
+}
+
+.stats-table .col-count {
+    width: 100px;
+    text-align: right;
+    color: #8f8;
+    font-family: monospace;
+    font-weight: bold;
+}
+
+.stats-table tbody tr {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.stats-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.stats-table tbody tr.selected {
+    background: rgba(33, 150, 243, 0.3);
+}
+
+.stats-table tbody tr.selected:hover {
+    background: rgba(33, 150, 243, 0.4);
+}
+
+.stats-table input[type="checkbox"] {
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+}
+
+.stats-detail-panel {
+    flex: 1;
+    background: #2a2a2a;
+    border-radius: 8px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+}
+
+.detail-placeholder {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #666;
+    font-size: 14px;
+}
+
+.detail-content h2 {
+    margin: 0 0 15px 0;
+    font-size: 18px;
+    font-weight: normal;
+    color: #fff;
+}
+
+.detail-chart-wrapper {
     position: relative;
     width: 100%;
-    height: 120px;
-    overflow: hidden;
-    box-sizing: border-box;
+    height: 300px;
+    margin-bottom: 20px;
 }
 
-.chart-wrapper canvas {
-    display: block;
+.detail-chart-wrapper canvas {
     width: 100% !important;
-    max-width: 100% !important;
-    height: 120px !important;
+    height: 100% !important;
+}
+
+.detail-stats {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.stat-box {
+    background: #333;
+    padding: 15px 20px;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.stat-label {
+    font-size: 12px;
+    color: #888;
+    text-transform: uppercase;
+}
+
+.stat-value {
+    font-size: 16px;
+    color: #fff;
+}
+
+.comparison-item {
+    background: #333;
+    padding: 10px 15px;
+    border-radius: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    min-width: 200px;
+}
+
+.comparison-name {
+    color: #ddd;
+    font-size: 13px;
+}
+
+.comparison-value {
+    color: #8f8;
+    font-family: monospace;
+    font-weight: bold;
+}
+
+.stats-compare-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #333;
+    border-top: 1px solid #555;
+    padding: 15px 20px;
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    z-index: 100;
+}
+
+.compare-btn {
+    background: #4CAF50;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.compare-btn:hover {
+    background: #45a049;
+}
+
+.clear-btn {
+    background: #666;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.clear-btn:hover {
+    background: #777;
 }

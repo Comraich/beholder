@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Beholder Statistics</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="stylesheet" href="style.css" />
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
+            integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4"
+            crossorigin="anonymous"></script>
+
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="manifest" href="/site.webmanifest">
+</head>
+<body class="stats-page">
+    <div class="stats-header-bar">
+        <a href="/" class="back-link">&larr; Back to Map</a>
+        <h1>Statistics Dashboard</h1>
+    </div>
+
+    <div class="stats-controls">
+        <div class="stats-time-buttons">
+            <button class="time-btn" data-range="1h">1h</button>
+            <button class="time-btn" data-range="12h">12h</button>
+            <button class="time-btn active" data-range="24h">24h</button>
+            <button class="time-btn" data-range="7d">7d</button>
+            <button class="time-btn" data-range="30d">30d</button>
+        </div>
+        <div class="stats-tabs">
+            <button class="tab-btn active" data-type="country">Countries</button>
+            <button class="tab-btn" data-type="asn">Organizations</button>
+        </div>
+    </div>
+
+    <div class="stats-main">
+        <div class="stats-table-panel">
+            <table class="stats-table">
+                <thead>
+                    <tr>
+                        <th class="col-checkbox"></th>
+                        <th class="col-name sortable" data-sort="name">Name</th>
+                        <th class="col-count sortable active" data-sort="count">Count</th>
+                    </tr>
+                </thead>
+                <tbody id="stats-table-body">
+                    <tr><td colspan="3">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="stats-detail-panel">
+            <div class="detail-placeholder" id="detail-placeholder">
+                <p>Select an item from the table to view its trend</p>
+            </div>
+            <div class="detail-content" id="detail-content" style="display: none;">
+                <h2 id="detail-title"></h2>
+                <div class="detail-chart-wrapper">
+                    <canvas id="detail-chart"></canvas>
+                </div>
+                <div class="detail-stats" id="detail-stats"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="stats-compare-bar" id="compare-bar" style="display: none;">
+        <button class="compare-btn" id="compare-btn">Compare Selected (<span id="compare-count">0</span>)</button>
+        <button class="clear-btn" id="clear-selection-btn">Clear Selection</button>
+    </div>
+
+    <script src="stats.js?v=3"></script>
+</body>
+</html>

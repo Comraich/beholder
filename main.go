@@ -703,6 +703,10 @@ type TimeSeriesResponse struct {
 
 func parseRange(rangeStr string) (time.Duration, error) {
 	switch rangeStr {
+	case "1h":
+		return 1 * time.Hour, nil
+	case "12h":
+		return 12 * time.Hour, nil
 	case "24h":
 		return 24 * time.Hour, nil
 	case "7d":
@@ -710,7 +714,7 @@ func parseRange(rangeStr string) (time.Duration, error) {
 	case "30d":
 		return 30 * 24 * time.Hour, nil
 	default:
-		return 0, fmt.Errorf("invalid range: %s (use 24h, 7d, or 30d)", rangeStr)
+		return 0, fmt.Errorf("invalid range: %s (use 1h, 12h, 24h, 7d, or 30d)", rangeStr)
 	}
 }
 
@@ -1007,6 +1011,8 @@ func main() {
 		http.HandleFunc("/android-chrome-512x512.png", serveStatic("android-chrome-512x512.png", "image/png"))
 		http.HandleFunc("/favicon.ico", serveStatic("favicon.ico", "image/x-icon"))
 		http.HandleFunc("/site.webmanifest", serveStatic("site.webmanifest", "application/manifest+json"))
+		http.HandleFunc("/stats.html", serveStatic("stats.html", ""))
+		http.HandleFunc("/stats.js", serveStatic("stats.js", "application/javascript"))
 		http.HandleFunc("/ws", serveWs)
 
 		// Historical stats API endpoints

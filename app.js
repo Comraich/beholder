@@ -53,150 +53,9 @@ document.addEventListener('DOMContentLoaded', function() {
     var topAsnsList = document.getElementById('top-asns');
     var historyRangeSelect = document.getElementById('history-range');
 
-    // Chart colors for top 5 items
-    var chartColors = [
-        'rgba(255, 99, 132, 0.8)',   // Red
-        'rgba(54, 162, 235, 0.8)',   // Blue
-        'rgba(255, 206, 86, 0.8)',   // Yellow
-        'rgba(75, 192, 192, 0.8)',   // Teal
-        'rgba(153, 102, 255, 0.8)'   // Purple
-    ];
-
     // Real-time stats tracking
     var countryCounts = {};
     var asnCounts = {};
-
-    // Initialize charts
-    var countryChart = null;
-    var asnChart = null;
-
-    function initCharts() {
-        var commonOptions = {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'bottom',
-                    labels: {
-                        color: '#ccc',
-                        font: { size: 10 },
-                        boxWidth: 12,
-                        padding: 8
-                    }
-                }
-            },
-            scales: {
-                x: {
-                    display: false
-                },
-                y: {
-                    ticks: { color: '#888', font: { size: 10 } },
-                    grid: { color: 'rgba(255,255,255,0.1)' }
-                }
-            }
-        };
-
-        var countryCtx = document.getElementById('country-chart').getContext('2d');
-        countryChart = new Chart(countryCtx, {
-            type: 'line',
-            data: { labels: [], datasets: [] },
-            options: commonOptions
-        });
-
-        var asnCtx = document.getElementById('asn-chart').getContext('2d');
-        asnChart = new Chart(asnCtx, {
-            type: 'line',
-            data: { labels: [], datasets: [] },
-            options: commonOptions
-        });
-    }
-
-    function loadHistoricalStats() {
-        var range = historyRangeSelect.value;
-        loadTopStats('country', range);
-        loadTopStats('asn', range);
-    }
-
-    function loadTopStats(type, range) {
-        fetch('/api/stats/top?type=' + type + '&range=' + range + '&limit=5')
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.items && data.items.length > 0) {
-                    loadTimeseriesForTop(type, range, data.items);
-                } else {
-                    // Clear chart if no data
-                    var chart = type === 'country' ? countryChart : asnChart;
-                    chart.data.labels = [];
-                    chart.data.datasets = [];
-                    chart.update();
-                }
-            })
-            .catch(function(err) {
-                console.error('Failed to load top stats:', err);
-            });
-    }
-
-    function loadTimeseriesForTop(type, range, topItems) {
-        var promises = topItems.map(function(item) {
-            return fetch('/api/stats/timeseries?type=' + type + '&range=' + range + '&name=' + encodeURIComponent(item.name))
-                .then(function(response) { return response.json(); });
-        });
-
-        Promise.all(promises).then(function(results) {
-            var chart = type === 'country' ? countryChart : asnChart;
-
-            // Collect all unique timestamps
-            var allTimestamps = new Set();
-            results.forEach(function(result) {
-                if (result.points) {
-                    result.points.forEach(function(p) { allTimestamps.add(p.timestamp); });
-                }
-            });
-
-            // Sort timestamps
-            var sortedTimestamps = Array.from(allTimestamps).sort(function(a, b) { return a - b; });
-
-            // Create labels
-            var labels = sortedTimestamps.map(function(ts) {
-                var date = new Date(ts * 1000);
-                if (range === '24h') {
-                    return date.getHours() + ':00';
-                } else {
-                    return (date.getMonth() + 1) + '/' + date.getDate();
-                }
-            });
-
-            // Create datasets
-            var datasets = results.map(function(result, index) {
-                var dataMap = {};
-                if (result.points) {
-                    result.points.forEach(function(p) { dataMap[p.timestamp] = p.count; });
-                }
-
-                var data = sortedTimestamps.map(function(ts) {
-                    return dataMap[ts] || 0;
-                });
-
-                return {
-                    label: result.name || topItems[index].name,
-                    data: data,
-                    borderColor: chartColors[index],
-                    backgroundColor: chartColors[index].replace('0.8', '0.2'),
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    tension: 0.3,
-                    fill: false
-                };
-            });
-
-            console.log('Updating chart:', type, 'labels:', labels.length, 'datasets:', datasets.length);
-            chart.data.labels = labels;
-            chart.data.datasets = datasets;
-            chart.update();
-        }).catch(function(err) {
-            console.error('Failed to load timeseries:', err);
-        });
-    }
 
     // Build HTML for stats lists
     function buildListHtml(list) {
@@ -298,31 +157,14 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Initialize charts and load historical data
-    console.log('Chart.js loaded:', typeof Chart !== 'undefined');
-    if (typeof Chart !== 'undefined') {
-        console.log('Initializing charts...');
-        initCharts();
-        loadHistoricalStats();
-        loadHistoricalLists();
+    // Load historical data
+    loadHistoricalLists();
 
-        // Sync with database every 30 seconds to stay accurate
-        setInterval(function() {
-            loadHistoricalStats();
-            loadHistoricalLists();
-        }, 30 * 1000);
+    // Sync with database every 30 seconds to stay accurate
+    setInterval(loadHistoricalLists, 30 * 1000);
 
-        // Reload when range changes
-        historyRangeSelect.addEventListener('change', function() {
-            loadHistoricalStats();
-            loadHistoricalLists();
-        });
-    } else {
-        // Chart.js not loaded, still load the lists
-        loadHistoricalLists();
-        setInterval(loadHistoricalLists, 30 * 1000);
-        historyRangeSelect.addEventListener('change', loadHistoricalLists);
-    }
+    // Reload when range changes
+    historyRangeSelect.addEventListener('change', loadHistoricalLists);
 
 
     // 3. Set up the WebSocket connection 
