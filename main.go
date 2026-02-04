@@ -26,6 +26,30 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// --- Constants ---
+const (
+	// Packet capture
+	defaultSnapshotLen = 1024
+
+	// WebSocket
+	clientSendBufferSize = 256
+
+	// Debouncing
+	debounceDuration      = 1 * time.Second
+	debounceCleanupPeriod = 5 * time.Minute
+
+	// Stats broadcasting
+	statsBroadcastInterval = 2 * time.Second
+
+	// Historical stats
+	statsChannelBuffer   = 10000
+	statsFlushInterval   = 1 * time.Minute
+	statsCleanupBatchSize = 1000
+
+	// Public IP refresh
+	publicIPRefreshInterval = 1 * time.Hour
+)
+
 // --- Configuration ---
 var (
 	iface              string
@@ -135,15 +159,14 @@ func checkOrigin(r *http.Request) bool {
 
 // --- Global Variables ---
 var (
-	snapshotLen      int32         = 1024
-	promiscuous      bool          = true
-	timeout          time.Duration = pcap.BlockForever
-	dbCity           *maxminddb.Reader
-	dbASN            *maxminddb.Reader
-	debounceDuration = 1 * time.Second
-	seenPairs        = &sync.Map{}
-	connections      = make(map[*websocket.Conn]bool)
-	connLock         = sync.RWMutex{}
+	snapshotLen int32         = defaultSnapshotLen
+	promiscuous bool          = true
+	timeout     time.Duration = pcap.BlockForever
+	dbCity      *maxminddb.Reader
+	dbASN       *maxminddb.Reader
+	seenPairs   = &sync.Map{}
+	clients          = make(map[*Client]bool)
+	clientsLock      = sync.RWMutex{}
 	upgrader         = websocket.Upgrader{
 		CheckOrigin: checkOrigin,
 	}
@@ -155,7 +178,10 @@ var (
 
 	// Historical stats
 	statsDB      *sql.DB
-	statsChannel = make(chan statsEvent, 10000) // Buffered channel for non-blocking sends
+	statsChannel = make(chan statsEvent, statsChannelBuffer)
+
+	// GeoIP cache
+	geoCache = &sync.Map{}
 )
 
 // statsEvent represents a single packet event for historical aggregation
@@ -192,6 +218,49 @@ type GeoRecord struct {
 type ASRecord struct {
 	AutonomousSystemOrganization string `maxminddb:"autonomous_system_organization"`
 }
+
+// geoCacheEntry holds cached GeoIP lookup results
+type geoCacheEntry struct {
+	city    GeoRecord
+	asn     ASRecord
+	valid   bool
+	created time.Time
+}
+
+const geoCacheMaxAge = 1 * time.Hour
+
+func lookupGeoIP(ip net.IP) (GeoRecord, ASRecord, bool) {
+	ipStr := ip.String()
+
+	// Check cache first
+	if cached, ok := geoCache.Load(ipStr); ok {
+		entry := cached.(*geoCacheEntry)
+		if time.Since(entry.created) < geoCacheMaxAge {
+			return entry.city, entry.asn, entry.valid
+		}
+		// Expired, will refresh below
+	}
+
+	// Perform lookups
+	var cityRecord GeoRecord
+	var asnRecord ASRecord
+	valid := true
+
+	if err := dbCity.Lookup(ip, &cityRecord); err != nil || cityRecord.Location.Latitude == 0 {
+		valid = false
+	}
+	_ = dbASN.Lookup(ip, &asnRecord)
+
+	// Cache the result
+	geoCache.Store(ipStr, &geoCacheEntry{
+		city:    cityRecord,
+		asn:     asnRecord,
+		valid:   valid,
+		created: time.Now(),
+	})
+
+	return cityRecord, asnRecord, valid
+}
 type GeoData struct {
 	SrcLat      float64 `json:"srcLat"`
 	SrcLon      float64 `json:"srcLon"`
@@ -217,34 +286,70 @@ type StatsData struct {
 	TopASNs      []StatItem `json:"topASNs"`
 }
 
-// --- WebSocket Hub (Unchanged) ---
+// --- WebSocket Hub ---
 type ClientMessage struct {
 	Type string `json:"type"`
 	Info string `json:"info"`
 }
 
+// Client represents a connected WebSocket client with its own send channel
+type Client struct {
+	conn *websocket.Conn
+	send chan WebSocketMessage
+}
+
 func broadcast(msg WebSocketMessage) {
-	var failed []*websocket.Conn
+	clientsLock.RLock()
+	defer clientsLock.RUnlock()
 
-	connLock.RLock()
-	for conn := range connections {
-		if err := conn.WriteJSON(msg); err != nil {
-			log.Printf("WebSocket write error: %v", err)
-			failed = append(failed, conn)
+	for client := range clients {
+		select {
+		case client.send <- msg:
+			// Message queued
+		default:
+			// Client buffer full, skip this message for this client
 		}
-	}
-	connLock.RUnlock()
-
-	// Remove failed connections
-	if len(failed) > 0 {
-		connLock.Lock()
-		for _, conn := range failed {
-			delete(connections, conn)
-			conn.Close()
-		}
-		connLock.Unlock()
 	}
 }
+
+func (c *Client) writePump() {
+	defer func() {
+		c.conn.Close()
+		clientsLock.Lock()
+		delete(clients, c)
+		clientsLock.Unlock()
+	}()
+
+	for msg := range c.send {
+		if err := c.conn.WriteJSON(msg); err != nil {
+			log.Printf("WebSocket write error: %v", err)
+			return
+		}
+	}
+}
+
+func (c *Client) readPump() {
+	defer func() {
+		close(c.send)
+	}()
+
+	for {
+		var msg ClientMessage
+		err := c.conn.ReadJSON(&msg)
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("Client disconnected (unexpected): %v", err)
+			} else {
+				log.Println("Client disconnected (normal).")
+			}
+			return
+		}
+		if msg.Type == "click" {
+			log.Printf("[CLIENT CLICK] Info: %s", msg.Info)
+		}
+	}
+}
+
 func serveWs(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -252,27 +357,18 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Println("New client connected!")
-	connLock.Lock()
-	connections[conn] = true
-	connLock.Unlock()
-	for {
-		var msg ClientMessage
-		err := conn.ReadJSON(&msg)
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("Client disconnected (unexpected): %v", err)
-			} else {
-				log.Println("Client disconnected (normal).")
-			}
-			connLock.Lock()
-			delete(connections, conn)
-			connLock.Unlock()
-			break
-		}
-		if msg.Type == "click" {
-			log.Printf("[CLIENT CLICK] Info: %s", msg.Info)
-		}
+
+	client := &Client{
+		conn: conn,
+		send: make(chan WebSocketMessage, clientSendBufferSize),
 	}
+
+	clientsLock.Lock()
+	clients[client] = true
+	clientsLock.Unlock()
+
+	go client.writePump()
+	client.readPump()
 }
 
 // --- IP/Web Server Functions ---
@@ -325,7 +421,7 @@ func updatePublicIPLoop() {
 			}
 			ipLock.Unlock()
 		}
-		time.Sleep(1 * time.Hour)
+		time.Sleep(publicIPRefreshInterval)
 	}
 }
 
@@ -336,7 +432,7 @@ func getTop5(m *sync.Map) []StatItem {
 	m.Range(func(key, value interface{}) bool {
 		items = append(items, StatItem{
 			Name:  key.(string),
-			Count: value.(int),
+			Count: int(value.(*atomic.Int64).Load()),
 		})
 		return true
 	})
@@ -353,11 +449,18 @@ func incrementCounter(m *sync.Map, key string) {
 	if key == "" {
 		return
 	}
-	count := 0
+	// Try to load existing counter
 	if val, ok := m.Load(key); ok {
-		count = val.(int)
+		val.(*atomic.Int64).Add(1)
+		return
 	}
-	m.Store(key, count+1)
+	// Create new counter
+	newCounter := &atomic.Int64{}
+	newCounter.Store(1)
+	// LoadOrStore handles race where another goroutine created it first
+	if existing, loaded := m.LoadOrStore(key, newCounter); loaded {
+		existing.(*atomic.Int64).Add(1)
+	}
 }
 
 // --- Historical Stats Database Functions ---
@@ -374,6 +477,7 @@ func initStatsDB() error {
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA synchronous=NORMAL",
 		"PRAGMA cache_size=10000",
+		"PRAGMA auto_vacuum=INCREMENTAL",
 	}
 	for _, pragma := range pragmas {
 		if _, err := statsDB.Exec(pragma); err != nil {
@@ -508,7 +612,7 @@ func (b *hourlyBuffer) flushLocked() {
 func aggregatorLoop() {
 	log.Println("Starting stats aggregator...")
 	buffer := newHourlyBuffer()
-	flushTicker := time.NewTicker(1 * time.Minute)
+	flushTicker := time.NewTicker(statsFlushInterval)
 	defer flushTicker.Stop()
 
 	for {
@@ -544,17 +648,22 @@ func cleanupOldStats() {
 	cutoff := time.Now().Add(-time.Duration(statsRetentionDays) * 24 * time.Hour).Unix()
 
 	// Delete in batches to avoid long locks
-	batchSize := 1000
-	tables := []string{"country_stats", "asn_stats"}
+	batchSize := statsCleanupBatchSize
 
-	for _, table := range tables {
+	// Use explicit queries to avoid SQL injection patterns
+	cleanupQueries := []struct {
+		name  string
+		query string
+	}{
+		{"country_stats", "DELETE FROM country_stats WHERE hour_bucket < ? LIMIT ?"},
+		{"asn_stats", "DELETE FROM asn_stats WHERE hour_bucket < ? LIMIT ?"},
+	}
+
+	for _, q := range cleanupQueries {
 		for {
-			result, err := statsDB.Exec(
-				fmt.Sprintf("DELETE FROM %s WHERE hour_bucket < ? LIMIT ?", table),
-				cutoff, batchSize,
-			)
+			result, err := statsDB.Exec(q.query, cutoff, batchSize)
 			if err != nil {
-				log.Printf("Stats cleanup error (%s): %v", table, err)
+				log.Printf("Stats cleanup error (%s): %v", q.name, err)
 				break
 			}
 			rowsAffected, _ := result.RowsAffected()
@@ -564,9 +673,9 @@ func cleanupOldStats() {
 		}
 	}
 
-	// VACUUM to reclaim space
-	if _, err := statsDB.Exec("VACUUM"); err != nil {
-		log.Printf("Stats VACUUM error: %v", err)
+	// Incremental vacuum to reclaim space without locking the database
+	if _, err := statsDB.Exec("PRAGMA incremental_vacuum"); err != nil {
+		log.Printf("Stats incremental_vacuum error: %v", err)
 	}
 
 	log.Println("Stats cleanup completed")
@@ -765,20 +874,26 @@ func handleStatsTimeseries(w http.ResponseWriter, r *http.Request) {
 // --- NEW: Goroutine to clean up the debounce cache ---
 func cleanupSeenPairsLoop() {
 	log.Println("Starting debounce cache janitor...")
-	ticker := time.NewTicker(5 * time.Minute) // Run every 5 minutes
+	ticker := time.NewTicker(debounceCleanupPeriod)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// We set the cutoff to 5 minutes ago.
-		// This means our debounce is effectively "once per 5 minutes"
-		// which is fine. We can adjust debounceDuration if needed.
-		cutoff := time.Now().Add(-5 * time.Minute)
+		cutoff := time.Now().Add(-debounceCleanupPeriod)
 
 		seenPairs.Range(func(key, value interface{}) bool {
 			if value.(time.Time).Before(cutoff) {
-				seenPairs.Delete(key) // Delete old entry
+				seenPairs.Delete(key)
 			}
-			return true // Continue iterating
+			return true
+		})
+
+		// Also clean up expired geo cache entries
+		geoCacheCutoff := time.Now().Add(-geoCacheMaxAge)
+		geoCache.Range(func(key, value interface{}) bool {
+			if value.(*geoCacheEntry).created.Before(geoCacheCutoff) {
+				geoCache.Delete(key)
+			}
+			return true
 		})
 	}
 }
@@ -786,7 +901,7 @@ func cleanupSeenPairsLoop() {
 // --- Stats broadcasting goroutine ---
 func broadcastStatsLoop() {
 	log.Println("Starting stats broadcaster...")
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(statsBroadcastInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -885,7 +1000,6 @@ func main() {
 		http.HandleFunc("/", serveStatic("index.html", ""))
 		http.HandleFunc("/style.css", serveStatic("style.css", "text/css"))
 		http.HandleFunc("/app.js", serveStatic("app.js", "application/javascript"))
-		http.HandleFunc("/leaflet.curve.js", serveStatic("leaflet.curve.js", "application/javascript"))
 		http.HandleFunc("/apple-touch-icon.png", serveStatic("apple-touch-icon.png", "image/png"))
 		http.HandleFunc("/favicon-32x32.png", serveStatic("favicon-32x32.png", "image/png"))
 		http.HandleFunc("/favicon-16x16.png", serveStatic("favicon-16x16.png", "image/png"))
@@ -976,19 +1090,12 @@ func main() {
 		// We only check if it's too soon to *draw the line*.
 		pairKey := direction + "->" + remoteIP.String() + ":" + fmt.Sprintf("%d", servicePort)
 
-		// --- GeoIP Lookup ---
-		var remoteRecord GeoRecord
-		var homeRecord GeoRecord
-		var remoteAsnRecord ASRecord
-		var homeAsnRecord ASRecord
-		if err = dbCity.Lookup(remoteIP, &remoteRecord); err != nil || remoteRecord.Location.Latitude == 0 {
+		// --- GeoIP Lookup (cached) ---
+		remoteRecord, remoteAsnRecord, remoteValid := lookupGeoIP(remoteIP)
+		if !remoteValid {
 			continue
 		}
-		_ = dbASN.Lookup(remoteIP, &remoteAsnRecord)
-		if err = dbCity.Lookup(homeIP, &homeRecord); err != nil {
-			continue
-		}
-		_ = dbASN.Lookup(homeIP, &homeAsnRecord)
+		homeRecord, homeAsnRecord, _ := lookupGeoIP(homeIP)
 
 		// --- Increment Counters ---
 		countryName := remoteRecord.Country.Names["en"]

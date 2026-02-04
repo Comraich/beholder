@@ -1,4 +1,6 @@
+console.log('app.js loaded');
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('DOMContentLoaded fired');
 
     // 1. Initialize the map
     var map = L.map('map', { 
@@ -66,7 +68,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function initCharts() {
         var commonOptions = {
-            responsive: true,
+            responsive: false,
             maintainAspectRatio: false,
             plugins: {
                 legend: {
@@ -183,6 +185,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 };
             });
 
+            console.log('Updating chart:', type, 'labels:', labels.length, 'datasets:', datasets.length);
             chart.data.labels = labels;
             chart.data.datasets = datasets;
             chart.update();
@@ -191,16 +194,78 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Initialize charts after DOM ready
+    // Build HTML for stats lists
+    function buildListHtml(list) {
+        var html = "";
+        if (!list || list.length === 0) {
+            return "<li><span class='stat-name'>No data yet...</span></li>";
+        }
+        list.forEach(function(item) {
+            html += "<li>" +
+                        "<span class='stat-name'>" + (item.name || "Unknown") + "</span>" +
+                        "<span class='stat-count'>" + formatCount(item.count) + "</span>" +
+                    "</li>";
+        });
+        return html;
+    }
+
+    // Format large numbers with K/M suffix
+    function formatCount(count) {
+        if (count >= 1000000) {
+            return (count / 1000000).toFixed(1) + 'M';
+        } else if (count >= 1000) {
+            return (count / 1000).toFixed(1) + 'K';
+        }
+        return count.toString();
+    }
+
+    // Load historical stats for the lists
+    function loadHistoricalLists() {
+        var range = historyRangeSelect.value;
+
+        fetch('/api/stats/top?type=country&range=' + range + '&limit=5')
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                topCountriesList.innerHTML = buildListHtml(data.items);
+            })
+            .catch(function(err) {
+                console.error('Failed to load country stats:', err);
+            });
+
+        fetch('/api/stats/top?type=asn&range=' + range + '&limit=5')
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                topAsnsList.innerHTML = buildListHtml(data.items);
+            })
+            .catch(function(err) {
+                console.error('Failed to load ASN stats:', err);
+            });
+    }
+
+    // Initialize charts and load historical data
+    console.log('Chart.js loaded:', typeof Chart !== 'undefined');
     if (typeof Chart !== 'undefined') {
+        console.log('Initializing charts...');
         initCharts();
         loadHistoricalStats();
+        loadHistoricalLists();
 
-        // Refresh charts every 5 minutes
-        setInterval(loadHistoricalStats, 5 * 60 * 1000);
+        // Refresh every 5 minutes
+        setInterval(function() {
+            loadHistoricalStats();
+            loadHistoricalLists();
+        }, 5 * 60 * 1000);
 
         // Reload when range changes
-        historyRangeSelect.addEventListener('change', loadHistoricalStats);
+        historyRangeSelect.addEventListener('change', function() {
+            loadHistoricalStats();
+            loadHistoricalLists();
+        });
+    } else {
+        // Chart.js not loaded, still load the lists
+        loadHistoricalLists();
+        setInterval(loadHistoricalLists, 5 * 60 * 1000);
+        historyRangeSelect.addEventListener('change', loadHistoricalLists);
     }
 
 
@@ -219,9 +284,8 @@ document.addEventListener('DOMContentLoaded', function() {
             var msg = JSON.parse(event.data);
             if (msg.type === "geo") {
                 drawConnection(msg.data);
-            } else if (msg.type === "stats") {
-                updateStats(msg.data);
             }
+            // Note: stats are now loaded from historical API, not WebSocket
         };
 
         socket.onclose = function(event) {
@@ -292,18 +356,14 @@ document.addEventListener('DOMContentLoaded', function() {
             "reverse": isReversed
         }).addTo(map);
         var serviceName = getFriendlyPortName(data.protocol, data.servicePort);
-        var popupContent = '<p class="info-title">' + popupCity + '</p>';
-        if (popupCountry) { popupContent += '<p class="info-country">' + popupCountry + '</p>'; }
+        var popupContent = '<p class="info-title">' + escapeHtml(popupCity) + '</p>';
+        if (popupCountry) { popupContent += '<p class="info-country">' + escapeHtml(popupCountry) + '</p>'; }
         if (popupAsnOrg) {
-            popupContent += '<hr class="info-divider">'; 
-            popupContent += '<p class="info-asn">' + popupAsnOrg + '</p>';
-        }
-        if (remoteIP) { popupContent += '<p class="info-ip">' + remoteIP + '</p>'; }
-        if (data.greynoise) {
             popupContent += '<hr class="info-divider">';
-            popupContent += '<p class="info-greynoise">GREYNOISE</p>';
+            popupContent += '<p class="info-asn">' + escapeHtml(popupAsnOrg) + '</p>';
         }
-        popupContent += '<p class="info-port">' + serviceName + '</p>'; 
+        if (remoteIP) { popupContent += '<p class="info-ip">' + escapeHtml(remoteIP) + '</p>'; }
+        popupContent += '<p class="info-port">' + escapeHtml(serviceName) + '</p>'; 
         var dotLocation = (data.dir === "out") ? end : start;
         var circle = L.circleMarker(dotLocation, {
             color: circleColor,
@@ -326,6 +386,14 @@ document.addEventListener('DOMContentLoaded', function() {
             map.removeLayer(line);
             map.removeLayer(circle);
         }, 3000);
+    }
+
+    // Escape HTML to prevent XSS
+    function escapeHtml(str) {
+        if (!str) return '';
+        var div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
     }
 
     // getFriendlyPortName
@@ -371,23 +439,4 @@ document.addEventListener('DOMContentLoaded', function() {
         return proto + "/" + port;
     }
 
-    // updateStats (Unchanged)
-    function updateStats(data) { /* ... (function is unchanged) ... */
-        function buildListHtml(list) {
-            var html = "";
-            if (list.length === 0) {
-                return "<li><span class='stat-name'>Waiting for data...</span></li>";
-            }
-            list.forEach(function(item) {
-                html += "<li>" +
-                            "<span class='stat-name'>" + (item.name || "Unknown") + "</span>" +
-                            "<span class='stat-count'>" + item.count + "</span>" +
-                        "</li>";
-            });
-            return html;
-        }
-        topCountriesList.innerHTML = buildListHtml(data.topCountries);
-        topAsnsList.innerHTML = buildListHtml(data.topASNs);
-    }
-
-}); 
+});

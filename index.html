@@ -8,7 +8,9 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="style.css" />
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
+            integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4"
+            crossorigin="anonymous"></script>
 
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
@@ -18,6 +20,14 @@
 </head>
 <body>
     <div id="stats-pane">
+        <div class="stats-header">
+            <span>Statistics</span>
+            <select id="history-range">
+                <option value="24h">24h</option>
+                <option value="7d">7d</option>
+                <option value="30d">30d</option>
+            </select>
+        </div>
         <h3>Top Countries</h3>
         <ul id="top-countries">
             <li>Loading...</li>
@@ -28,21 +38,18 @@
         </ul>
 
         <div id="history-section">
-            <div class="history-header">
-                <h3>History</h3>
-                <select id="history-range">
-                    <option value="24h">24 hours</option>
-                    <option value="7d">7 days</option>
-                    <option value="30d">30 days</option>
-                </select>
-            </div>
+            <h3>Trends</h3>
             <div class="chart-container">
                 <h4>Countries</h4>
-                <canvas id="country-chart"></canvas>
+                <div class="chart-wrapper">
+                    <canvas id="country-chart" width="300" height="120"></canvas>
+                </div>
             </div>
             <div class="chart-container">
                 <h4>Organizations</h4>
-                <canvas id="asn-chart"></canvas>
+                <div class="chart-wrapper">
+                    <canvas id="asn-chart" width="300" height="120"></canvas>
+                </div>
             </div>
         </div>
     </div>
@@ -69,10 +76,16 @@
 
     <div id="map"></div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" data-cfasync="false"></script>
-    <script src="https://cdn.jsdelivr.net/npm/leaflet-curve@1.0.0/leaflet.curve.js"></script>
-    <script src="https://unpkg.com/leaflet-ant-path@1.3.0/dist/leaflet-ant-path.js" data-cfasync="false"></script>
-    <script src="app.js" data-cfasync="false"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet-curve@1.0.0/leaflet.curve.js"
+            integrity="sha384-jTQlUgAeFALh+DuxtW5JnPihz4+u7O8ZfOBFkTRbnU9ZtCZh6jLuJjD9R3AVJZba"
+            crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/leaflet-ant-path@1.3.0/dist/leaflet-ant-path.js"
+            integrity="sha384-OEj5w5dYIX4MUvZAeaQ/7L8HGNi6Qtb54Yl6dY1sUQyUiOuxeUznR8DOvAWHGpOx"
+            crossorigin="anonymous"></script>
+    <script src="app.js?v=3" data-cfasync="false"></script>
     
 </body>
 </html>
