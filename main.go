@@ -745,7 +745,7 @@ func handleStatsTop(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cutoff := time.Now().Add(-rangeDuration).Unix()
+	cutoff := time.Now().Add(-rangeDuration).Truncate(time.Hour).Unix()
 
 	var query string
 	if statsType == "country" {
@@ -824,7 +824,7 @@ func handleStatsTimeseries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cutoff := time.Now().Add(-rangeDuration).Unix()
+	cutoff := time.Now().Add(-rangeDuration).Truncate(time.Hour).Unix()
 
 	var query string
 	if statsType == "country" {
