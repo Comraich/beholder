@@ -188,14 +188,16 @@ var (
 type statsEvent struct {
 	country string
 	asnOrg  string
+	service string
 }
 
 // hourlyBuffer holds in-memory aggregations before flushing to SQLite
+// Uses composite keys: "country|service" and "asn|service"
 type hourlyBuffer struct {
 	sync.Mutex
-	countries map[string]int
-	asns      map[string]int
-	hourBucket int64
+	countryService map[string]int // key: "country|service"
+	asnService     map[string]int // key: "asn|service"
+	hourBucket     int64
 }
 
 // --- Structs ---
@@ -280,6 +282,86 @@ type GeoData struct {
 type StatItem struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
+}
+
+// getServiceName maps protocol and port to a friendly service name
+func getServiceName(protocol string, port int) string {
+	if protocol == "TCP" {
+		switch port {
+		case 80, 8080:
+			return "HTTP"
+		case 443, 8443:
+			return "HTTPS"
+		case 22:
+			return "SSH"
+		case 21:
+			return "FTP"
+		case 20:
+			return "FTP-Data"
+		case 25, 587:
+			return "SMTP"
+		case 110:
+			return "POP3"
+		case 143:
+			return "IMAP"
+		case 993:
+			return "IMAPS"
+		case 995:
+			return "POP3S"
+		case 23:
+			return "Telnet"
+		case 3389:
+			return "RDP"
+		case 5900, 5901:
+			return "VNC"
+		case 3306:
+			return "MySQL"
+		case 5432:
+			return "PostgreSQL"
+		case 27017:
+			return "MongoDB"
+		case 6379:
+			return "Redis"
+		case 11211:
+			return "Memcached"
+		case 445:
+			return "SMB"
+		case 139:
+			return "NetBIOS"
+		case 1433:
+			return "MSSQL"
+		case 1521:
+			return "Oracle"
+		case 6667, 6697:
+			return "IRC"
+		}
+	} else if protocol == "UDP" {
+		switch port {
+		case 53:
+			return "DNS"
+		case 123:
+			return "NTP"
+		case 161, 162:
+			return "SNMP"
+		case 67, 68:
+			return "DHCP"
+		case 69:
+			return "TFTP"
+		case 514:
+			return "Syslog"
+		case 1900:
+			return "SSDP"
+		case 5353:
+			return "mDNS"
+		case 51820:
+			return "WireGuard"
+		case 500, 4500:
+			return "IPSec"
+		case 1194:
+			return "OpenVPN"
+		}
+	}
+	return "Other"
 }
 type StatsData struct {
 	TopCountries []StatItem `json:"topCountries"`
@@ -485,24 +567,45 @@ func initStatsDB() error {
 		}
 	}
 
-	// Create tables
+	// Check if migration is needed (old schema without service column)
+	needsMigration := false
+	var colCount int
+	err = statsDB.QueryRow("SELECT COUNT(*) FROM pragma_table_info('country_stats') WHERE name='service'").Scan(&colCount)
+	if err == nil && colCount == 0 {
+		// Table exists but doesn't have service column
+		needsMigration = true
+	}
+
+	if needsMigration {
+		log.Println("Migrating stats database to new schema with service column...")
+		// Drop old tables (stats data is transient, 30-day retention)
+		_, _ = statsDB.Exec("DROP TABLE IF EXISTS country_stats")
+		_, _ = statsDB.Exec("DROP TABLE IF EXISTS asn_stats")
+		log.Println("Old stats tables dropped")
+	}
+
+	// Create tables with service column
 	schema := `
 	CREATE TABLE IF NOT EXISTS country_stats (
 		country TEXT NOT NULL,
+		service TEXT NOT NULL DEFAULT 'Other',
 		hour_bucket INTEGER NOT NULL,
 		packet_count INTEGER NOT NULL DEFAULT 0,
-		UNIQUE(country, hour_bucket)
+		UNIQUE(country, service, hour_bucket)
 	);
 
 	CREATE TABLE IF NOT EXISTS asn_stats (
 		asn_org TEXT NOT NULL,
+		service TEXT NOT NULL DEFAULT 'Other',
 		hour_bucket INTEGER NOT NULL,
 		packet_count INTEGER NOT NULL DEFAULT 0,
-		UNIQUE(asn_org, hour_bucket)
+		UNIQUE(asn_org, service, hour_bucket)
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_country_stats_hour ON country_stats(hour_bucket);
+	CREATE INDEX IF NOT EXISTS idx_country_stats_service ON country_stats(service);
 	CREATE INDEX IF NOT EXISTS idx_asn_stats_hour ON asn_stats(hour_bucket);
+	CREATE INDEX IF NOT EXISTS idx_asn_stats_service ON asn_stats(service);
 	`
 	if _, err := statsDB.Exec(schema); err != nil {
 		return fmt.Errorf("failed to create schema: %w", err)
@@ -517,9 +620,9 @@ func getCurrentHourBucket() int64 {
 
 func newHourlyBuffer() *hourlyBuffer {
 	return &hourlyBuffer{
-		countries:  make(map[string]int),
-		asns:       make(map[string]int),
-		hourBucket: getCurrentHourBucket(),
+		countryService: make(map[string]int),
+		asnService:     make(map[string]int),
+		hourBucket:     getCurrentHourBucket(),
 	}
 }
 
@@ -535,11 +638,18 @@ func (b *hourlyBuffer) add(evt statsEvent) {
 		b.hourBucket = currentHour
 	}
 
+	service := evt.service
+	if service == "" {
+		service = "Other"
+	}
+
 	if evt.country != "" {
-		b.countries[evt.country]++
+		key := evt.country + "|" + service
+		b.countryService[key]++
 	}
 	if evt.asnOrg != "" {
-		b.asns[evt.asnOrg]++
+		key := evt.asnOrg + "|" + service
+		b.asnService[key]++
 	}
 }
 
@@ -550,7 +660,7 @@ func (b *hourlyBuffer) flush() {
 }
 
 func (b *hourlyBuffer) flushLocked() {
-	if len(b.countries) == 0 && len(b.asns) == 0 {
+	if len(b.countryService) == 0 && len(b.asnService) == 0 {
 		return
 	}
 
@@ -561,11 +671,11 @@ func (b *hourlyBuffer) flushLocked() {
 	}
 	defer tx.Rollback()
 
-	// UPSERT countries
+	// UPSERT countries with service
 	countryStmt, err := tx.Prepare(`
-		INSERT INTO country_stats (country, hour_bucket, packet_count)
-		VALUES (?, ?, ?)
-		ON CONFLICT(country, hour_bucket) DO UPDATE SET
+		INSERT INTO country_stats (country, service, hour_bucket, packet_count)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(country, service, hour_bucket) DO UPDATE SET
 		packet_count = packet_count + excluded.packet_count
 	`)
 	if err != nil {
@@ -574,17 +684,22 @@ func (b *hourlyBuffer) flushLocked() {
 	}
 	defer countryStmt.Close()
 
-	for country, count := range b.countries {
-		if _, err := countryStmt.Exec(country, b.hourBucket, count); err != nil {
+	for key, count := range b.countryService {
+		parts := strings.SplitN(key, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		country, service := parts[0], parts[1]
+		if _, err := countryStmt.Exec(country, service, b.hourBucket, count); err != nil {
 			log.Printf("Stats DB insert error (country): %v", err)
 		}
 	}
 
-	// UPSERT ASNs
+	// UPSERT ASNs with service
 	asnStmt, err := tx.Prepare(`
-		INSERT INTO asn_stats (asn_org, hour_bucket, packet_count)
-		VALUES (?, ?, ?)
-		ON CONFLICT(asn_org, hour_bucket) DO UPDATE SET
+		INSERT INTO asn_stats (asn_org, service, hour_bucket, packet_count)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(asn_org, service, hour_bucket) DO UPDATE SET
 		packet_count = packet_count + excluded.packet_count
 	`)
 	if err != nil {
@@ -593,8 +708,13 @@ func (b *hourlyBuffer) flushLocked() {
 	}
 	defer asnStmt.Close()
 
-	for asn, count := range b.asns {
-		if _, err := asnStmt.Exec(asn, b.hourBucket, count); err != nil {
+	for key, count := range b.asnService {
+		parts := strings.SplitN(key, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		asnOrg, service := parts[0], parts[1]
+		if _, err := asnStmt.Exec(asnOrg, service, b.hourBucket, count); err != nil {
 			log.Printf("Stats DB insert error (asn): %v", err)
 		}
 	}
@@ -605,8 +725,8 @@ func (b *hourlyBuffer) flushLocked() {
 	}
 
 	// Clear the buffer
-	b.countries = make(map[string]int)
-	b.asns = make(map[string]int)
+	b.countryService = make(map[string]int)
+	b.asnService = make(map[string]int)
 }
 
 func aggregatorLoop() {
@@ -745,30 +865,60 @@ func handleStatsTop(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Optional service filter
+	service := r.URL.Query().Get("service")
+
 	cutoff := time.Now().Add(-rangeDuration).Truncate(time.Hour).Unix()
 
-	var query string
-	if statsType == "country" {
-		query = `
-			SELECT country, SUM(packet_count) as total
-			FROM country_stats
-			WHERE hour_bucket >= ?
-			GROUP BY country
-			ORDER BY total DESC
-			LIMIT ?
-		`
+	var rows *sql.Rows
+	if service == "" || service == "all" {
+		// No service filter - aggregate across all services
+		var query string
+		if statsType == "country" {
+			query = `
+				SELECT country, SUM(packet_count) as total
+				FROM country_stats
+				WHERE hour_bucket >= ?
+				GROUP BY country
+				ORDER BY total DESC
+				LIMIT ?
+			`
+		} else {
+			query = `
+				SELECT asn_org, SUM(packet_count) as total
+				FROM asn_stats
+				WHERE hour_bucket >= ?
+				GROUP BY asn_org
+				ORDER BY total DESC
+				LIMIT ?
+			`
+		}
+		rows, err = statsDB.Query(query, cutoff, limit)
 	} else {
-		query = `
-			SELECT asn_org, SUM(packet_count) as total
-			FROM asn_stats
-			WHERE hour_bucket >= ?
-			GROUP BY asn_org
-			ORDER BY total DESC
-			LIMIT ?
-		`
+		// Filter by specific service
+		var query string
+		if statsType == "country" {
+			query = `
+				SELECT country, SUM(packet_count) as total
+				FROM country_stats
+				WHERE hour_bucket >= ? AND service = ?
+				GROUP BY country
+				ORDER BY total DESC
+				LIMIT ?
+			`
+		} else {
+			query = `
+				SELECT asn_org, SUM(packet_count) as total
+				FROM asn_stats
+				WHERE hour_bucket >= ? AND service = ?
+				GROUP BY asn_org
+				ORDER BY total DESC
+				LIMIT ?
+			`
+		}
+		rows, err = statsDB.Query(query, cutoff, service, limit)
 	}
 
-	rows, err := statsDB.Query(query, cutoff, limit)
 	if err != nil {
 		log.Printf("Stats query error: %v", err)
 		http.Error(w, "database error", http.StatusInternalServerError)
@@ -824,26 +974,54 @@ func handleStatsTimeseries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional service filter
+	service := r.URL.Query().Get("service")
+
 	cutoff := time.Now().Add(-rangeDuration).Truncate(time.Hour).Unix()
 
-	var query string
-	if statsType == "country" {
-		query = `
-			SELECT hour_bucket, packet_count
-			FROM country_stats
-			WHERE country = ? AND hour_bucket >= ?
-			ORDER BY hour_bucket ASC
-		`
+	var rows *sql.Rows
+	if service == "" || service == "all" {
+		// No service filter - aggregate across all services
+		var query string
+		if statsType == "country" {
+			query = `
+				SELECT hour_bucket, SUM(packet_count) as total
+				FROM country_stats
+				WHERE country = ? AND hour_bucket >= ?
+				GROUP BY hour_bucket
+				ORDER BY hour_bucket ASC
+			`
+		} else {
+			query = `
+				SELECT hour_bucket, SUM(packet_count) as total
+				FROM asn_stats
+				WHERE asn_org = ? AND hour_bucket >= ?
+				GROUP BY hour_bucket
+				ORDER BY hour_bucket ASC
+			`
+		}
+		rows, err = statsDB.Query(query, name, cutoff)
 	} else {
-		query = `
-			SELECT hour_bucket, packet_count
-			FROM asn_stats
-			WHERE asn_org = ? AND hour_bucket >= ?
-			ORDER BY hour_bucket ASC
-		`
+		// Filter by specific service
+		var query string
+		if statsType == "country" {
+			query = `
+				SELECT hour_bucket, packet_count
+				FROM country_stats
+				WHERE country = ? AND hour_bucket >= ? AND service = ?
+				ORDER BY hour_bucket ASC
+			`
+		} else {
+			query = `
+				SELECT hour_bucket, packet_count
+				FROM asn_stats
+				WHERE asn_org = ? AND hour_bucket >= ? AND service = ?
+				ORDER BY hour_bucket ASC
+			`
+		}
+		rows, err = statsDB.Query(query, name, cutoff, service)
 	}
 
-	rows, err := statsDB.Query(query, name, cutoff)
 	if err != nil {
 		log.Printf("Stats timeseries query error: %v", err)
 		http.Error(w, "database error", http.StatusInternalServerError)
@@ -873,6 +1051,60 @@ func handleStatsTimeseries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(response)
+}
+
+// ServiceCount represents a service with its packet count
+type ServiceCount struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+func handleStatsServices(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	rangeStr := r.URL.Query().Get("range")
+	if rangeStr == "" {
+		rangeStr = "24h"
+	}
+	rangeDuration, err := parseRange(rangeStr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cutoff := time.Now().Add(-rangeDuration).Truncate(time.Hour).Unix()
+
+	query := `
+		SELECT service, SUM(packet_count) as total
+		FROM country_stats
+		WHERE hour_bucket >= ?
+		GROUP BY service
+		ORDER BY total DESC
+	`
+
+	rows, err := statsDB.Query(query, cutoff)
+	if err != nil {
+		log.Printf("Stats services query error: %v", err)
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var services []ServiceCount
+	for rows.Next() {
+		var svc ServiceCount
+		if err := rows.Scan(&svc.Name, &svc.Count); err != nil {
+			log.Printf("Stats services scan error: %v", err)
+			continue
+		}
+		services = append(services, svc)
+	}
+
+	if services == nil {
+		services = []ServiceCount{}
+	}
+
+	json.NewEncoder(w).Encode(services)
 }
 
 // --- NEW: Goroutine to clean up the debounce cache ---
@@ -1018,6 +1250,7 @@ func main() {
 		// Historical stats API endpoints
 		http.HandleFunc("/api/stats/top", handleStatsTop)
 		http.HandleFunc("/api/stats/timeseries", handleStatsTimeseries)
+		http.HandleFunc("/api/stats/services", handleStatsServices)
 		log.Printf("Starting web server on %s\n", webServerPort)
 		if err := http.ListenAndServe(webServerPort, nil); err != nil {
 			log.Fatal("ListenAndServe: ", err)
@@ -1106,12 +1339,13 @@ func main() {
 		// --- Increment Counters ---
 		countryName := remoteRecord.Country.Names["en"]
 		asnOrgName := remoteAsnRecord.AutonomousSystemOrganization
+		serviceName := getServiceName(protocol, servicePort)
 		incrementCounter(countryCounts.Load(), countryName)
 		incrementCounter(asnCounts.Load(), asnOrgName)
 
 		// Send to historical stats channel (non-blocking)
 		select {
-		case statsChannel <- statsEvent{country: countryName, asnOrg: asnOrgName}:
+		case statsChannel <- statsEvent{country: countryName, asnOrg: asnOrgName, service: serviceName}:
 		default:
 			// Channel full, drop event (packet capture never blocks)
 		}

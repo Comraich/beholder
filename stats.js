@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // State
     var currentType = 'country';
     var currentRange = '24h';
+    var currentService = 'all';
     var currentSort = { field: 'count', direction: 'desc' };
     var allItems = [];
     var selectedItems = new Set();
@@ -73,11 +74,107 @@ document.addEventListener('DOMContentLoaded', function() {
         return count.toLocaleString();
     }
 
+    // Get service name from protocol and port (mirrors backend logic)
+    function getServiceName(protocol, port) {
+        if (protocol === 'TCP') {
+            switch (port) {
+                case 80: case 8080: return 'HTTP';
+                case 443: case 8443: return 'HTTPS';
+                case 22: return 'SSH';
+                case 21: return 'FTP';
+                case 20: return 'FTP-Data';
+                case 25: case 587: return 'SMTP';
+                case 110: return 'POP3';
+                case 143: return 'IMAP';
+                case 993: return 'IMAPS';
+                case 995: return 'POP3S';
+                case 23: return 'Telnet';
+                case 3389: return 'RDP';
+                case 5900: case 5901: return 'VNC';
+                case 3306: return 'MySQL';
+                case 5432: return 'PostgreSQL';
+                case 27017: return 'MongoDB';
+                case 6379: return 'Redis';
+                case 11211: return 'Memcached';
+                case 445: return 'SMB';
+                case 139: return 'NetBIOS';
+                case 1433: return 'MSSQL';
+                case 1521: return 'Oracle';
+                case 6667: case 6697: return 'IRC';
+            }
+        } else if (protocol === 'UDP') {
+            switch (port) {
+                case 53: return 'DNS';
+                case 123: return 'NTP';
+                case 161: case 162: return 'SNMP';
+                case 67: case 68: return 'DHCP';
+                case 69: return 'TFTP';
+                case 514: return 'Syslog';
+                case 1900: return 'SSDP';
+                case 5353: return 'mDNS';
+                case 51820: return 'WireGuard';
+                case 500: case 4500: return 'IPSec';
+                case 1194: return 'OpenVPN';
+            }
+        }
+        return 'Other';
+    }
+
+    // Load available services for the current time range
+    function loadServices() {
+        fetch('/api/stats/services?range=' + currentRange)
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                var select = document.getElementById('serviceFilter');
+                var currentValue = select.value;
+
+                // Clear and rebuild options
+                select.innerHTML = '';
+
+                // Always add "All" option first
+                var allOption = document.createElement('option');
+                allOption.value = 'all';
+                allOption.textContent = 'All';
+                select.appendChild(allOption);
+
+                // Add option for each service from DB
+                data.forEach(function(item) {
+                    var option = document.createElement('option');
+                    option.value = item.name;
+                    option.textContent = item.name + ' (' + item.count.toLocaleString() + ')';
+                    select.appendChild(option);
+                });
+
+                // Restore selection if it still exists, otherwise reset to 'all'
+                if (currentValue && select.querySelector('option[value="' + currentValue + '"]')) {
+                    select.value = currentValue;
+                } else {
+                    select.value = 'all';
+                    currentService = 'all';
+                }
+            })
+            .catch(function(err) {
+                console.error('Failed to load services:', err);
+            });
+    }
+
+    // Handle service filter change
+    function setupServiceFilter() {
+        var select = document.getElementById('serviceFilter');
+        select.addEventListener('change', function() {
+            currentService = select.value;
+            loadFullRankings();
+            // Clear detail panel
+            detailPlaceholder.style.display = 'block';
+            detailContent.style.display = 'none';
+        });
+    }
+
     // Load full rankings
     function loadFullRankings() {
         tableBody.innerHTML = '<tr><td colspan="3">Loading...</td></tr>';
 
-        fetch('/api/stats/top?type=' + currentType + '&range=' + currentRange + '&limit=100')
+        fetch('/api/stats/top?type=' + currentType + '&range=' + currentRange + '&service=' + currentService + '&limit=100')
             .then(function(response) { return response.json(); })
             .then(function(data) {
                 allItems = data.items || [];
@@ -184,7 +281,7 @@ document.addEventListener('DOMContentLoaded', function() {
         detailPlaceholder.style.display = 'none';
         detailContent.style.display = 'block';
 
-        fetch('/api/stats/timeseries?type=' + currentType + '&range=' + currentRange + '&name=' + encodeURIComponent(name))
+        fetch('/api/stats/timeseries?type=' + currentType + '&range=' + currentRange + '&service=' + currentService + '&name=' + encodeURIComponent(name))
             .then(function(response) { return response.json(); })
             .then(function(data) {
                 renderSingleChart(name, data);
@@ -206,7 +303,7 @@ document.addEventListener('DOMContentLoaded', function() {
         detailContent.style.display = 'block';
 
         var promises = names.map(function(name) {
-            return fetch('/api/stats/timeseries?type=' + currentType + '&range=' + currentRange + '&name=' + encodeURIComponent(name))
+            return fetch('/api/stats/timeseries?type=' + currentType + '&range=' + currentRange + '&service=' + currentService + '&name=' + encodeURIComponent(name))
                 .then(function(response) { return response.json(); });
         });
 
@@ -361,6 +458,7 @@ document.addEventListener('DOMContentLoaded', function() {
             document.querySelectorAll('.time-btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
             currentRange = btn.dataset.range;
+            loadServices();
             loadFullRankings();
             // Clear detail panel
             detailPlaceholder.style.display = 'block';
@@ -433,6 +531,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Update counts from real-time geo data
     function updateFromGeo(data) {
+        // Filter by service if not showing "all"
+        var serviceName = getServiceName(data.protocol, data.servicePort);
+        if (currentService !== 'all' && serviceName !== currentService) {
+            return;
+        }
+
         var name;
         if (currentType === 'country') {
             name = data.dir === "out" ? data.dstCountry : data.srcCountry;
@@ -470,6 +574,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize
     if (typeof Chart !== 'undefined') {
         initDetailChart();
+        setupServiceFilter();
+        loadServices();
         loadFullRankings();
         connectWebSocket();
         startPeriodicSync();
