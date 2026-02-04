@@ -62,6 +62,10 @@ document.addEventListener('DOMContentLoaded', function() {
         'rgba(153, 102, 255, 0.8)'   // Purple
     ];
 
+    // Real-time stats tracking
+    var countryCounts = {};
+    var asnCounts = {};
+
     // Initialize charts
     var countryChart = null;
     var asnChart = null;
@@ -219,27 +223,79 @@ document.addEventListener('DOMContentLoaded', function() {
         return count.toString();
     }
 
-    // Load historical stats for the lists
+    // Load historical stats and populate local tracking objects
     function loadHistoricalLists() {
         var range = historyRangeSelect.value;
 
-        fetch('/api/stats/top?type=country&range=' + range + '&limit=5')
+        fetch('/api/stats/top?type=country&range=' + range + '&limit=100')
             .then(function(response) { return response.json(); })
             .then(function(data) {
-                topCountriesList.innerHTML = buildListHtml(data.items);
+                // Reset and populate country counts from historical data
+                countryCounts = {};
+                if (data.items) {
+                    data.items.forEach(function(item) {
+                        countryCounts[item.name] = item.count;
+                    });
+                }
+                renderTopCountries();
             })
             .catch(function(err) {
                 console.error('Failed to load country stats:', err);
             });
 
-        fetch('/api/stats/top?type=asn&range=' + range + '&limit=5')
+        fetch('/api/stats/top?type=asn&range=' + range + '&limit=100')
             .then(function(response) { return response.json(); })
             .then(function(data) {
-                topAsnsList.innerHTML = buildListHtml(data.items);
+                // Reset and populate ASN counts from historical data
+                asnCounts = {};
+                if (data.items) {
+                    data.items.forEach(function(item) {
+                        asnCounts[item.name] = item.count;
+                    });
+                }
+                renderTopAsns();
             })
             .catch(function(err) {
                 console.error('Failed to load ASN stats:', err);
             });
+    }
+
+    // Get top 5 from counts object
+    function getTop5(counts) {
+        return Object.keys(counts)
+            .map(function(name) { return { name: name, count: counts[name] }; })
+            .sort(function(a, b) { return b.count - a.count; })
+            .slice(0, 5);
+    }
+
+    // Render top countries list
+    function renderTopCountries() {
+        topCountriesList.innerHTML = buildListHtml(getTop5(countryCounts));
+    }
+
+    // Render top ASNs list
+    function renderTopAsns() {
+        topAsnsList.innerHTML = buildListHtml(getTop5(asnCounts));
+    }
+
+    // Increment stats from a geo message
+    function updateStatsFromGeo(data) {
+        var country, asn;
+        if (data.dir === "out") {
+            country = data.dstCountry;
+            asn = data.dstAsnOrg;
+        } else {
+            country = data.srcCountry;
+            asn = data.srcAsnOrg;
+        }
+        if (country) {
+            countryCounts[country] = (countryCounts[country] || 0) + 1;
+            renderTopCountries();
+        }
+        if (asn) {
+            asnCounts[asn] = (asnCounts[asn] || 0) + 1;
+            renderTopAsns();
+        }
     }
 
     // Initialize charts and load historical data
@@ -250,11 +306,11 @@ document.addEventListener('DOMContentLoaded', function() {
         loadHistoricalStats();
         loadHistoricalLists();
 
-        // Refresh every 5 minutes
+        // Sync with database every 30 seconds to stay accurate
         setInterval(function() {
             loadHistoricalStats();
             loadHistoricalLists();
-        }, 5 * 60 * 1000);
+        }, 30 * 1000);
 
         // Reload when range changes
         historyRangeSelect.addEventListener('change', function() {
@@ -264,7 +320,7 @@ document.addEventListener('DOMContentLoaded', function() {
     } else {
         // Chart.js not loaded, still load the lists
         loadHistoricalLists();
-        setInterval(loadHistoricalLists, 5 * 60 * 1000);
+        setInterval(loadHistoricalLists, 30 * 1000);
         historyRangeSelect.addEventListener('change', loadHistoricalLists);
     }
 
@@ -284,8 +340,8 @@ document.addEventListener('DOMContentLoaded', function() {
             var msg = JSON.parse(event.data);
             if (msg.type === "geo") {
                 drawConnection(msg.data);
+                updateStatsFromGeo(msg.data);
             }
-            // Note: stats are now loaded from historical API, not WebSocket
         };
 
         socket.onclose = function(event) {
